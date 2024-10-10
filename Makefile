@@ -1,11 +1,23 @@
-COMP=gcc
+CC=gcc
 FLAGS=-Wall
+BUILD_DIR=build
+OBJ_DIR=obj
 
-all:
-	$(COMP) $(FLAGS) -o build/main main.c
+all: init daemon tests
 
-tests:
-	$(COMP) $(FLAGS) -o build/tests -DTESTING tests.c main.c
+init:
+	mkdir -p $(BUILD_DIR)
+	mkdir -p $(OBJ_DIR)
+
+daemon: $(OBJ_DIR)/main.o
+	$(CC) $(FLAGS) -o $(BUILD_DIR)/main $^
+
+$(OBJ_DIR)/%.o: %.c
+	$(CC) -c -o $@ $<
+
+tests: $(OBJ_DIR)/tests.o $(OBJ_DIR)/main.o
+	$(CC) $(FLAGS) -o $(BUILD_DIR)/tests -DTESTING $^
 
 clean:
-	rm build/main build/tests
+	rm -rf $(BUILD_DIR)
+	rm -rf $(OBJ_DIR)
