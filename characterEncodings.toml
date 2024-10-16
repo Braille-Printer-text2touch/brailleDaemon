@@ -1,0 +1,28 @@
+#################################
+# TOML Encodings are explained in the following example for 'n'
+#
+# Each character is represented by an array of 6 total elements
+# split between 2 subarrays of 3 elements each
+#
+# * is dot, . is no dot
+#
+# n: * *
+#    . *
+#    * .
+#
+# Split in half vertically and assign to seperate sub arrays
+#
+#          Array 0     Array 1
+# Index 0     *           *
+# Index 1     .           *
+# Index 2     *           .
+#
+# Dots are represented by a 1, no dot is represented by a 0
+#
+#######################
+
+# * .
+# . .
+# . .
+a = [ [1, 0, 0], [0, 0, 0] ]
+
