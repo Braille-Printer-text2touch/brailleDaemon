@@ -13,9 +13,15 @@ it's own set of dependencies.
 
 On the Pi, the main.py runs in a virtual environment with all dependencies. To use:
 
-```python
+```bash
 source daemon-venv/bin/activate
 python3 main.py
 ```
 
 Will use the [wiringpi](https://github.com/WiringPi/WiringPi) or [lgpio](https://abyz.me.uk/lg/lgpio.html) library to use the GPIO pins.
+
+## Braille
+
+The braille alphabet, for reference:
+
+![Braille Alphabet picture should be here...](https://www.tsbvi.edu/wp-content/uploads/assets/images/in-body/fw-ibi-braille_alphabet.jpg)
