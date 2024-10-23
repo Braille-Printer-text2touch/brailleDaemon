@@ -1,30 +1,66 @@
-from time import sleep
 from adafruit_motorkit import MotorKit
 # gives access to SINGLE, DOUBLE, FORWARD, BACKWARD, INTERLEAVE, MICROSTEP
 from adafruit_motor import stepper
+import RPi.GPIO as GPIO
+
+from time import sleep
 import os
 import signal
 import tomllib
 import threading
 
-SPOOLER_SEM = threading.Semaphore() # automatically w/ count 1
+#########
+# Settings
+######
 PIPE_PATH = "/var/run/user/1000/text2type_pipe"
 DEBUG = True
 ERROR_DEBUG = True
 CHARS_PER_LINE = 30
 STEPPER_PAUSE = 0.5 # in seconds
+SOL_0 = 4
+SOL_1 = 17
+SOL_2 = 18
+########
 
+########
+# Setup 
+#####
+SPOOLER_SEM = threading.Semaphore() # automatically w/ count 1
+GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
+SOL_CHANNELS = (SOL_0, SOL_1, SOL_2)
 with open("characterEncodings.toml", "rb") as f:
-    CHAR_ENCODES = tomllib.load(f)
+    CHAR_ENCODES: dict[str, list[list[bool]]] = tomllib.load(f)
+JOB_COUNT = 0 # for jobs to increment
 
 def cleanExit(sig, frame) -> None:
     '''Clean up. For when a kill signal is detected'''
-    print("Cleaning up")
+    print("\nCleaning up")
     os.remove(PIPE_PATH)
+    GPIO.cleanup()
     print("Cleaned up! Until next time, user.")
     exit(0)
 
 signal.signal(signal.SIGINT, cleanExit)
+#######
+
+def printHalfCharacter(*sol_values: bool) -> None:
+    '''
+    Runs all three solenoids at specified parameters and resets them after.
+    Additionally moves the print head. This function runs hardware.
+
+    Args:
+        sol_values (tuple<bool>):
+            A tuple of exectly 3 boolean values. For each value at index i, 
+            if true, solenoid i is set high, otherwise set low.
+    Returns:
+        None
+    '''
+    GPIO.output(SOL_CHANNELS, sol_values)
+    sleep(0.1)
+    GPIO.output(SOL_CHANNELS, GPIO.LOW)
+    sleep(0.1)
+    kit.stepper1.onestep()
+    sleep(STEPPER_PAUSE)
 
 kit = MotorKit()
 def encodeChar(char: str) -> None:
@@ -51,18 +87,13 @@ def encodeChar(char: str) -> None:
 
     DEBUG and print("encodeChar(): printing " + char)
     if encode := CHAR_ENCODES.get(char):
-        # second half first because paper is punched upside down,
-        # so the characters need to be vertically reversed
-        encode[1][0] # and solonoid 0
-        encode[1][1] # and solonoid 1
-        encode[1][2] # and solonoid 2
-        kit.stepper1.onestep()
-        sleep(STEPPER_PAUSE)
-        encode[0][0] # and solonoid 0
-        encode[0][1] # and solonoid 1
-        encode[0][2] # and solonoid 2
-        kit.stepper1.onestep()
-        sleep(STEPPER_PAUSE)
+        # second half first because paper is punched upside down, 
+        # so the characters need to be vertically reflected 
+        # Also, ecode[1] is passed because it is a sub array with three values 
+        # one for each solenoid channeli.
+        printHalfCharacter(*encode[1])
+        printHalfCharacter(*encode[0])
+
     elif char == ' ':
         kit.stepper1.onestep(style = stepper.DOUBLE)
     else:
@@ -70,6 +101,15 @@ def encodeChar(char: str) -> None:
 
 
 def encodeString(s: str) -> None:
+    '''
+    Print a string of characters onto the paper. This will handle chunking and 
+    putting the characters in the correct order.
+
+    Args:
+        s (string): The string to be printed
+    Returns:
+        None
+    '''
     DEBUG and print("encodeString(): printing " + s)
     chunk = 0 # start at the first chunk of the string
     chars_to_print = len(s) # keep track of how many characters we've printed
@@ -86,10 +126,24 @@ def encodeString(s: str) -> None:
         chars_to_print -= out_index - in_index
         chunk += 1
 
-def print_job(data: str):
+def print_job(data: str) -> None:
+    '''
+    Sets up a chunk of data to be printed. This is meant to be the entry point of 
+    a thread, where each thread is a job to be printed.
+
+    Args:
+        data (string): The entire text to be printed
+    Returns:
+        None
+    '''
+    global JOB_COUNT
+    JOB_COUNT += 1
     SPOOLER_SEM.acquire()
     # critical section because ecoding will be running the hardware
     for line in data.split('\n'): encodeString(line.strip())
+    JOB_COUNT -= 1
+    if JOB_COUNT > 0:
+        input(f"\n There are {JOB_COUNT} other jobs waiting. Press enter to start the next.")
     SPOOLER_SEM.release()
 
 def main() -> None:
@@ -104,6 +158,9 @@ def main() -> None:
         exit(-1)
     finally:
         print("Pipe ready at " + PIPE_PATH)
+
+    # setup solenoid pins
+    GPIO.setup(SOL_CHANNELS, GPIO.OUT)
 
     while True:
         # have to keep opening the pipe because the connection closes
