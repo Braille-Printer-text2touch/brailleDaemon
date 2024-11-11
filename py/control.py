@@ -11,14 +11,17 @@ from math import pi
 ######
 PIPE_PATH = "/var/run/user/1000/text2type_pipe"
 CHARS_PER_LINE = 30
-STEPPER_PAUSE = 0.5 # in seconds
+STEPPER_RPM = 1000 # absolute max at 3000
 DEBUG = True
-SOL_PAUSE = 0.5 # was able to get this down to 0.1
-SOL_0 = 17
+SOL_PAUSE = 0.2 # was able to get this down to 0.1
+SOL_0 = 27
 SOL_1 = 23
-SOL_2 = 27
-STEPPER_0_RADIUS = 1 #TODO: get actual value
-STEPPER_1_RADIUS = 0.75
+SOL_2 = 17
+BUTTON = 20
+SPACE_STEPS = 34
+HALF_CHAR_STEPS = 11
+NEW_LINE_STEPS = 10 #TODO: get real value
+RESET_STEPS = 10 #TODO: get real value
 ########
 
 ########
@@ -27,8 +30,11 @@ STEPPER_1_RADIUS = 0.75
 SOL_CHANNELS = (SOL_0, SOL_1, SOL_2)
 CHAR_ENCODES: dict[str, list[list[bool]]] = {}
 KIT = MotorKit()
-STEPS_PER_CM_0: float = 200 / (2 * STEPPER_0_RADIUS * pi) #TODO: make this more stable
-STEPS_PER_CM_1: float = 200 / (2 * STEPPER_1_RADIUS * pi) #TODO: make this more stable
+HEAD_STEPPER = 1
+PAPER_STEPPER = 0
+assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
+STEPPER_PAUSE = 1 / (STEPPER_RPM / 60) # in seconds
+assert(STEPPER_PAUSE >= 0.02)
 ########
 
 def setup():
@@ -40,6 +46,8 @@ def setup():
         CHAR_ENCODES = tomllib.load(f)
     JOB_COUNT = 0 # for jobs to increment
     GPIO.setup(SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
+    # set pull up resistor
+    GPIO.setup(BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 def cleanup() -> None:
     '''Clean up resources used and stop hold current on steppers'''
@@ -47,23 +55,68 @@ def cleanup() -> None:
     KIT.stepper1.release()
     KIT.stepper2.release()
 
-def move_stepper_cm(motor: int, distance: int | float = 1) -> None:
+def set_button_callback(callback) -> None:
     '''
-    Move a stepper motor by one centimeter.
+    Set a callback function for when the button is pressed.
 
     Args:
-        motor (int): The stepper motor to run. 0 for stepper 0, 1 for stepper 1.
-        distance (int | float): How many centimeters to move by. Defaults to 1.
+        callback (function): The function to call when the button is pressed.
     Returns:
         None
     '''
-    dir = stepper.FORWARD if distance > 0 else stepper.BACKWARD
-    chosen_motor = KIT.stepper1 if motor == 0 else KIT.stepper2
+    GPIO.add_event_detect(BUTTON, GPIO.FALLING, callback=callback)
 
-    for _ in range(int(STEPS_PER_CM_0 * distance)):
+def reset_print_head() -> None:
+    '''
+    Moves the print head to the edge of the container.
+    Should be used before calling start_print_head().
+
+    Returns:
+        None
+    '''
+    # reach edge of enclosure
+    while GPIO.input(BUTTON) == GPIO.HIGH:
+        KIT.stepper2.onestep()
+        sleep(STEPPER_PAUSE)
+
+
+def start_print_head() -> None:
+    '''
+    Moves the print head over the printing area (from edge of container).
+    Is meant to be used after reset_print_head().
+
+    Returns:
+        None
+    '''
+    # move over to start of line
+    move_stepper_n_steps(HEAD_STEPPER, RESET_STEPS)
+
+def new_line() -> None:
+    move_stepper_n_steps(PAPER_STEPPER, NEW_LINE_STEPS)
+    reset_print_head()
+    start_print_head()
+
+
+def move_stepper_n_steps(motor: int, n: int) -> None:
+    '''
+    Move a stepper motor by n steps.
+
+    Args:
+        motor (int): The stepper motor to run. 0 for stepper 0, 1 for stepper 1.
+        distance (int): How many steps to move by.
+    Returns:
+        None
+    '''
+    # if n > 0, for motor1 step backward 
+    # if n > 0, for motor0 step forward 
+    dir = stepper.FORWARD if ((n > 0) ^ (motor == HEAD_STEPPER)) else stepper.BACKWARD
+    chosen_motor = KIT.stepper1 if motor == PAPER_STEPPER else KIT.stepper2
+
+    for _ in range(n):
         chosen_motor.onestep(direction = dir)
         sleep(STEPPER_PAUSE)
 
+    chosen_motor.release()
 
 def print_half_character(*sol_values: bool) -> None:
     '''
@@ -87,7 +140,7 @@ def print_half_character(*sol_values: bool) -> None:
         sleep(SOL_PAUSE)
         GPIO.output(SOL_CHANNELS, GPIO.LOW)
         sleep(SOL_PAUSE)
-    move_stepper_cm(1, 0.1) # 0.1 cm over for next half of character
+    move_stepper_n_steps(HEAD_STEPPER, HALF_CHAR_STEPS)
     sleep(STEPPER_PAUSE)
 
 def encode_char(char: str) -> None:
@@ -120,9 +173,10 @@ def encode_char(char: str) -> None:
         # one for each solenoid channeli.
         print_half_character(*encode[1])
         print_half_character(*encode[0])
+        move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - (2 * HALF_CHAR_STEPS)) # 2x because two half chars were already printed
 
     elif char == ' ':
-        move_stepper_cm(1, 0.2) # 0.2 cm over for a space
+        move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS)
     else:
         DEBUG and print("*** encode_char(): '" + char + "' not found ***")
 
@@ -152,6 +206,7 @@ def encode_string(s: str) -> None:
         # is how many characters that we're printed in this iteration
         chars_to_print -= out_index - in_index
         chunk += 1
+        new_line()
 
     KIT.stepper1.release()
     KIT.stepper2.release()

@@ -11,16 +11,16 @@ if input("Test steppers? (y/N) ").lower() == 'y':
         control.KIT.stepper1.onestep() if i < 10 else control.KIT.stepper1.onestep(direction = stepper.BACKWARD)
         sleep(control.STEPPER_PAUSE)
     sleep(1)
-    print("Moving stepper 0 by 1 cm")
-    control.move_stepper_cm(0)
+    print("Moving stepper 0 by 20 steps")
+    control.move_stepper_n_steps(0, 20)
 
     print("Testing stepper 1")
     for i in range(20):
         control.KIT.stepper2.onestep() if i < 10 else control.KIT.stepper2.onestep(direction = stepper.BACKWARD)
         sleep(control.STEPPER_PAUSE)
     sleep(1)
-    print("Moving stepper 1 by 1 cm")
-    control.move_stepper_cm(1)
+    print("Moving stepper 1 by 20 steps")
+    control.move_stepper_n_steps(1, 20)
 
 if input("Test solenoids? (y/N) ").lower() == 'y':
     print("Testing solenoid 0")
@@ -43,6 +43,22 @@ if input("Test solenoids? (y/N) ").lower() == 'y':
     GPIO.output(control.SOL_2, GPIO.LOW)
     sleep(control.SOL_PAUSE)
     sleep(3)
+
+if input("Test button? (y/N) ").lower() == 'y':
+    print("Waiting for button press")
+    while (GPIO.input(control.BUTTON) == GPIO.HIGH):
+        sleep(0.5)
+    print("Button pressed")
+
+    if (
+        input("\033[33mTest starting the head? THIS CAN BREAK STUFF IF THE BUTTON IS NOT WORKING (y/N) \033[0m").lower() == 'y'
+        and input("Are you sure? (y/N) ") == 'y'
+    ):
+        control.reset_print_head()
+        
+        if input("Start print head? (y/N) ") == 'y':
+            control.start_print_head()
+
 
 if input("Test braille printing in terminal? (y/N) ").lower() == 'y':
     while c := input("Enter character to see braille encoding, or nothing to end. DON'T CTRL-C!\n"):
