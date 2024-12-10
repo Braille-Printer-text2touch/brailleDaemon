@@ -4,7 +4,6 @@ from adafruit_motorkit import MotorKit
 import RPi.GPIO as GPIO
 import tomllib
 from time import sleep
-from math import pi
 
 #########
 # Settings
@@ -18,10 +17,10 @@ SOL_0 = 27
 SOL_1 = 23
 SOL_2 = 17
 BUTTON = 20
-SPACE_STEPS = 34
-HALF_CHAR_STEPS = 11
-NEW_LINE_STEPS = 10 #TODO: get real value
-RESET_STEPS = 10 #TODO: get real value
+SPACE_STEPS = 36
+HALF_CHAR_STEPS = 12
+NEW_LINE_STEPS = 21
+RESET_STEPS = 168
 ########
 
 ########
@@ -96,7 +95,6 @@ def new_line() -> None:
     reset_print_head()
     start_print_head()
 
-
 def move_stepper_n_steps(motor: int, n: int) -> None:
     '''
     Move a stepper motor by n steps.
@@ -118,7 +116,7 @@ def move_stepper_n_steps(motor: int, n: int) -> None:
 
     chosen_motor.release()
 
-def print_half_character(*sol_values: bool) -> None:
+def print_half_character(*sol_values: bool, serial_solenoids=True) -> None:
     '''
     Runs all three solenoids at specified parameters and resets them after.
     Additionally moves the print head. This function runs hardware.
@@ -133,13 +131,20 @@ def print_half_character(*sol_values: bool) -> None:
     if len(sol_values) != 3:
         raise ValueError("print_half_character(): need exactly three values for solenoids")
 
+    # only bother running solenoid if there are values that need to be 
+    # printed. otherwise, just move to next half
     if sum(sol_values) > 0:
-        # only bother running solenoid if there are values that need to be 
-        # printed. otherwise, just move to next half
-        GPIO.output(SOL_CHANNELS, sol_values)
-        sleep(SOL_PAUSE)
-        GPIO.output(SOL_CHANNELS, GPIO.LOW)
-        sleep(SOL_PAUSE)
+        if serial_solenoids:
+            for i in range(3):
+                GPIO.output(SOL_CHANNELS[i], sol_values[i])
+                sleep(SOL_PAUSE)
+                GPIO.output(SOL_CHANNELS[i], GPIO.LOW)
+                sleep(SOL_PAUSE)
+        else:
+            GPIO.output(SOL_CHANNELS, sol_values)
+            sleep(SOL_PAUSE)
+            GPIO.output(SOL_CHANNELS, GPIO.LOW)
+            sleep(SOL_PAUSE)
     move_stepper_n_steps(HEAD_STEPPER, HALF_CHAR_STEPS)
     sleep(STEPPER_PAUSE)
 
@@ -199,7 +204,7 @@ def encode_string(s: str) -> None:
         out_index = in_index + min(CHARS_PER_LINE, chars_to_print)
         DEBUG and print(f"encode_string(): chunk {chunk} '{s[in_index:out_index]}'")
 
-        for char in s[in_index:out_index]:
+        for char in reversed(s[in_index:out_index]):
             encode_char(char)
 
         # difference between out_index and in_index 
