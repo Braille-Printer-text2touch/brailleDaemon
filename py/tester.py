@@ -61,11 +61,13 @@ if input("Test button? (y/N) ").lower() == 'y':
 
 
 if input("Test braille printing in terminal? (y/N) ").lower() == 'y':
-    while c := input("Enter character to see braille encoding, or nothing to end. DON'T CTRL-C!\n"):
-        if encoding := control.CHAR_ENCODES.get(c):
-            for row in zip(encoding[0], encoding[1]): print(row)
-        else:
-            print("Didn't find character " + c)
+    while s := input("Enter string to see braille encoding, or nothing to end. DON'T CTRL-C!\n"):
+        try:
+            for c in s:
+                print(control.ascii2braille(c), end="")
+            print() # new line
+        except Exception as e:
+            print(e)
 
 if input("Test braille printing w/ hardware? (y/N) ").lower() == 'y':
     while s := input("Input string to test printing, or nothing to end. DON'T CTRL-C!\n"):

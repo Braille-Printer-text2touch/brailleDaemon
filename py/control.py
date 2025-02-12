@@ -10,9 +10,9 @@ from time import sleep
 ######
 PIPE_PATH = "/var/run/user/1000/text2type_pipe"
 CHARS_PER_LINE = 30
-STEPPER_RPM = 1000 # absolute max at 3000
+STEPPER_RPM = 200 # absolute max at 3000
 DEBUG = True
-SOL_PAUSE = 0.2 # was able to get this down to 0.1
+SOL_PAUSE = 0.5 # was able to get this down to 0.1
 SOL_0 = 27
 SOL_1 = 23
 SOL_2 = 17
@@ -27,22 +27,26 @@ RESET_STEPS = 168
 # Helpful things
 ######
 SOL_CHANNELS = (SOL_0, SOL_1, SOL_2)
-CHAR_ENCODES: dict[str, list[list[bool]]] = {}
 KIT = MotorKit()
 HEAD_STEPPER = 1
 PAPER_STEPPER = 0
 assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
 STEPPER_PAUSE = 1 / (STEPPER_RPM / 60) # in seconds
 assert(STEPPER_PAUSE >= 0.02)
+BRAILLE_JUMP = "⠀⠮⠐⠼⠫⠩⠯⠄⠷⠾⠡⠬⠠⠤⠨⠌⠴⠂⠆⠒⠲⠢⠖⠶⠦⠔⠱⠰⠣⠿⠜⠹⠈⠁⠃⠉⠙⠑⠋⠛⠓⠊⠚⠅⠇⠍⠝⠕⠏⠟⠗⠎⠞⠥⠧⠺⠭⠽⠵⠪⠳⠻⠘⠸"
+########
+
+########
+# Type definitions
+######
+BrailleHalfChar = tuple[bool, bool, bool]
+BrailleArray = tuple[BrailleHalfChar, BrailleHalfChar]
 ########
 
 def setup():
     '''Sets up the global variables and surrounding environment'''
-    global CHAR_ENCODES
     global JOB_COUNT
     GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
-    with open("../characterEncodings.toml", "rb") as f:
-        CHAR_ENCODES = tomllib.load(f)
     JOB_COUNT = 0 # for jobs to increment
     GPIO.setup(SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
     # set pull up resistor
@@ -148,6 +152,57 @@ def print_half_character(*sol_values: bool, serial_solenoids=True) -> None:
     move_stepper_n_steps(HEAD_STEPPER, HALF_CHAR_STEPS)
     sleep(STEPPER_PAUSE)
 
+def ascii2braille(c: str) -> str:
+    '''
+    Takes a unicode character in the range 0x20 (SPACE) to 0x5F (underscore) and 
+    returns its unicode brialle representation.
+
+    The ASCII characters to be translated to braille exist in the range 0x20 (SPACE)
+    to 0x5F (underscore), thus determining the chracter in question is a simple substraction from 0x20
+    which can then be used to index a specially crafted string as a jump table
+
+    Inputs:
+        c: str, the character to transliterate
+    Outputs:
+        str: the transliterated braille character (unicode)
+    '''
+    # only uppercase characters are in the proper range
+    ascii_offset = ord(c.upper()) - 0x20
+    if not (0x0 <= ascii_offset <= 0x3F):
+        # out of range
+        raise Exception("Unsupported character")
+
+    return BRAILLE_JUMP[ascii_offset]
+
+def braille2array(b: str) -> BrailleArray:
+    '''
+    Takes a braille unicode character and returns its array representation for 
+    running the solenoids.
+    
+    Braille characters start at 0x2800 and, for the first 0x3F characters,
+    increment by counting in binary down the left column then down the right column
+    Example:
+        0x101110
+    is
+          .
+        .
+        . .
+
+    Inputs:
+        b: str, the utf8 braille character to convert
+    Outputs:
+        BrailleArray: the character represented by two BrailleHalfChar
+    '''
+    braille_offset = ord(b) - 0x2800
+    if not (0x0 <= braille_offset <= 0x3F):
+        # out of range
+        raise Exception("Unsupported character")
+
+    return (
+            (bool(braille_offset & 1 << 0), bool(braille_offset & 1 << 1), bool(braille_offset & 1 << 2)),
+            (bool(braille_offset & 1 << 3), bool(braille_offset & 1 << 4), bool(braille_offset & 1 << 5))
+           )
+
 def encode_char(char: str) -> None:
     '''
     Print a character onto the paper. This function runs hardware
@@ -171,20 +226,19 @@ def encode_char(char: str) -> None:
     ##########
 
     DEBUG and print("encode_char(): printing " + char)
-    if encode := CHAR_ENCODES.get(char):
-        # second half first because paper is punched upside down, 
-        # so the characters need to be vertically reflected 
-        # Also, ecode[1] is passed because it is a sub array with three values 
-        # one for each solenoid channeli.
-        print_half_character(*encode[1])
-        print_half_character(*encode[0])
-        move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - (2 * HALF_CHAR_STEPS)) # 2x because two half chars were already printed
-
-    elif char == ' ':
-        move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS)
-    else:
-        DEBUG and print("*** encode_char(): '" + char + "' not found ***")
-
+    try:
+        unicode_braille = ascii2braille(char)
+    except Exception as e:
+        DEBUG and print(e)
+        return
+    
+    DEBUG and print("encode_char(): printing (braille) " + unicode_braille)
+    array_braille = braille2array(unicode_braille)
+    # second half first because paper is punched upside down, 
+    # so the characters need to be vertically reflected 
+    print_half_character(*array_braille[1])
+    print_half_character(*array_braille[0])
+    move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - (2 * HALF_CHAR_STEPS)) # 2x because two half chars were already printed
 
 def encode_string(s: str) -> None:
     '''
