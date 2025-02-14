@@ -2,7 +2,6 @@
 from adafruit_motor import stepper
 from adafruit_motorkit import MotorKit
 import RPi.GPIO as GPIO
-import tomllib
 from time import sleep
 
 #########
@@ -10,17 +9,22 @@ from time import sleep
 ######
 PIPE_PATH = "/var/run/user/1000/text2type_pipe"
 CHARS_PER_LINE = 30
-STEPPER_RPM = 200 # absolute max at 3000
 DEBUG = True
-SOL_PAUSE = 0.5 # was able to get this down to 0.1
+SOL_PAUSE = 0.1 # was able to get this down to 0.1
+MICROSTEPS_IN_ROT = 16
+SERIAL_SOLENOIDS = True
+
+### Various GPIO aliases (numbers in BCM)
 SOL_0 = 27
 SOL_1 = 23
 SOL_2 = 17
 BUTTON = 20
-SPACE_STEPS = 36
-HALF_CHAR_STEPS = 12
-NEW_LINE_STEPS = 21
-RESET_STEPS = 168
+
+## Various precalculated steps
+HALF_CHAR_STEPS = 194
+SPACE_STEPS = 500
+NEW_LINE_STEPS = 341
+RESET_STEPS = 2648
 ########
 
 ########
@@ -28,12 +32,15 @@ RESET_STEPS = 168
 ######
 SOL_CHANNELS = (SOL_0, SOL_1, SOL_2)
 KIT = MotorKit()
-HEAD_STEPPER = 1
-PAPER_STEPPER = 0
+HEAD_STEPPER = KIT.stepper2
+PAPER_STEPPER = KIT.stepper1
 assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
-STEPPER_PAUSE = 1 / (STEPPER_RPM / 60) # in seconds
-assert(STEPPER_PAUSE >= 0.02)
 BRAILLE_JUMP = "⠀⠮⠐⠼⠫⠩⠯⠄⠷⠾⠡⠬⠠⠤⠨⠌⠴⠂⠆⠒⠲⠢⠖⠶⠦⠔⠱⠰⠣⠿⠜⠹⠈⠁⠃⠉⠙⠑⠋⠛⠓⠊⠚⠅⠇⠍⠝⠕⠏⠟⠗⠎⠞⠥⠧⠺⠭⠽⠵⠪⠳⠻⠘⠸"
+STEPS_PER_ROTATION = 200 * MICROSTEPS_IN_ROT
+
+## Physical Sizes (mm)
+PAPER_STEPPER_DIAMETER = 30.1625
+HEAD_STEPPER_DIAMETER = 12.7
 ########
 
 ########
@@ -45,19 +52,20 @@ BrailleArray = tuple[BrailleHalfChar, BrailleHalfChar]
 
 def setup():
     '''Sets up the global variables and surrounding environment'''
-    global JOB_COUNT
     GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
-    JOB_COUNT = 0 # for jobs to increment
     GPIO.setup(SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
     # set pull up resistor
     GPIO.setup(BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    HEAD_STEPPER.release()
+    PAPER_STEPPER.release()
 
 def cleanup() -> None:
     '''Clean up resources used and stop hold current on steppers'''
     GPIO.cleanup()
-    KIT.stepper1.release()
-    KIT.stepper2.release()
+    HEAD_STEPPER.release()
+    PAPER_STEPPER.release()
 
+# TODO: is this function even necessary?
 def set_button_callback(callback) -> None:
     '''
     Set a callback function for when the button is pressed.
@@ -79,8 +87,9 @@ def reset_print_head() -> None:
     '''
     # reach edge of enclosure
     while GPIO.input(BUTTON) == GPIO.HIGH:
-        KIT.stepper2.onestep()
-        sleep(STEPPER_PAUSE)
+        HEAD_STEPPER.onestep(style=stepper.MICROSTEP)
+
+    HEAD_STEPPER.release()
 
 
 def start_print_head() -> None:
@@ -99,7 +108,10 @@ def new_line() -> None:
     reset_print_head()
     start_print_head()
 
-def move_stepper_n_steps(motor: int, n: int) -> None:
+def mm_to_steps(circumference_mm: float, n_mm: float) -> int:
+    return int(n_mm / (circumference_mm / STEPS_PER_ROTATION)) # return number of steps to move n_mm
+
+def move_stepper_n_steps(motor: stepper.StepperMotor, n: int) -> None:
     '''
     Move a stepper motor by n steps.
 
@@ -112,13 +124,11 @@ def move_stepper_n_steps(motor: int, n: int) -> None:
     # if n > 0, for motor1 step backward 
     # if n > 0, for motor0 step forward 
     dir = stepper.FORWARD if ((n > 0) ^ (motor == HEAD_STEPPER)) else stepper.BACKWARD
-    chosen_motor = KIT.stepper1 if motor == PAPER_STEPPER else KIT.stepper2
 
     for _ in range(n):
-        chosen_motor.onestep(direction = dir)
-        sleep(STEPPER_PAUSE)
+        motor.onestep(direction = dir, style=stepper.MICROSTEP)
 
-    chosen_motor.release()
+    motor.release()
 
 def print_half_character(*sol_values: bool, serial_solenoids=True) -> None:
     '''
@@ -150,7 +160,6 @@ def print_half_character(*sol_values: bool, serial_solenoids=True) -> None:
             GPIO.output(SOL_CHANNELS, GPIO.LOW)
             sleep(SOL_PAUSE)
     move_stepper_n_steps(HEAD_STEPPER, HALF_CHAR_STEPS)
-    sleep(STEPPER_PAUSE)
 
 def ascii2braille(c: str) -> str:
     '''
@@ -236,8 +245,8 @@ def encode_char(char: str) -> None:
     array_braille = braille2array(unicode_braille)
     # second half first because paper is punched upside down, 
     # so the characters need to be vertically reflected 
-    print_half_character(*array_braille[1])
-    print_half_character(*array_braille[0])
+    print_half_character(*array_braille[1], serial_solenoids=SERIAL_SOLENOIDS)
+    print_half_character(*array_braille[0], serial_solenoids=SERIAL_SOLENOIDS)
     move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - (2 * HALF_CHAR_STEPS)) # 2x because two half chars were already printed
 
 def encode_string(s: str) -> None:
@@ -267,5 +276,5 @@ def encode_string(s: str) -> None:
         chunk += 1
         new_line()
 
-    KIT.stepper1.release()
-    KIT.stepper2.release()
+    HEAD_STEPPER.release()
+    PAPER_STEPPER.release()

@@ -1,26 +1,18 @@
 import RPi.GPIO as GPIO
-from adafruit_motor import stepper
 from time import sleep
 import control
+from math import pi
 
 control.setup()
 
 if input("Test steppers? (y/N) ").lower() == 'y':
-    print("Testing stepper 0")
-    for i in range(20):
-        control.KIT.stepper1.onestep() if i < 10 else control.KIT.stepper1.onestep(direction = stepper.BACKWARD)
-        sleep(control.STEPPER_PAUSE)
-    sleep(1)
-    print("Moving stepper 0 by 20 steps")
-    control.move_stepper_n_steps(0, 20)
+    n_steps = control.mm_to_steps(control.PAPER_STEPPER_DIAMETER * 2 * pi, 10)
+    print("Testing Paper Stepper (10 mm)")
+    control.move_stepper_n_steps(control.PAPER_STEPPER, n_steps)
 
-    print("Testing stepper 1")
-    for i in range(20):
-        control.KIT.stepper2.onestep() if i < 10 else control.KIT.stepper2.onestep(direction = stepper.BACKWARD)
-        sleep(control.STEPPER_PAUSE)
-    sleep(1)
-    print("Moving stepper 1 by 20 steps")
-    control.move_stepper_n_steps(1, 20)
+    n_steps = control.mm_to_steps(control.HEAD_STEPPER_DIAMETER * 2 * pi, 10)
+    print("Testing Head Stepper (10 mm)")
+    control.move_stepper_n_steps(control.HEAD_STEPPER, n_steps)
 
 if input("Test solenoids? (y/N) ").lower() == 'y':
     print("Testing solenoid 0")
