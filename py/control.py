@@ -3,6 +3,7 @@ from adafruit_motor import stepper
 from adafruit_motorkit import MotorKit
 import RPi.GPIO as GPIO
 from time import sleep
+import math
 
 #########
 # Settings
@@ -13,18 +14,19 @@ DEBUG = True
 SOL_PAUSE = 0.1 # was able to get this down to 0.1
 MICROSTEPS_IN_ROT = 16
 SERIAL_SOLENOIDS = True
+MICROSTEPS = 4
 
 ### Various GPIO aliases (numbers in BCM)
-SOL_0 = 27
-SOL_1 = 23
-SOL_2 = 17
+SOL_0  = 27
+SOL_1  = 23
+SOL_2  = 17
 BUTTON = 20
 
 ## Various precalculated steps
-HALF_CHAR_STEPS = 194
-SPACE_STEPS = 500
-NEW_LINE_STEPS = 341
-RESET_STEPS = 2648
+HALF_CHAR_STEPS   = int(12.125  * MICROSTEPS)
+SPACE_STEPS       = int(31.25   * MICROSTEPS)
+NEW_LINE_STEPS    = int(21.3125 * MICROSTEPS)
+RESET_STEPS       = int(165.5   * MICROSTEPS)
 ########
 
 ########
@@ -50,12 +52,27 @@ BrailleHalfChar = tuple[bool, bool, bool]
 BrailleArray = tuple[BrailleHalfChar, BrailleHalfChar]
 ########
 
+def set_microsteps(stepper, microsteps):
+        stepper._curve = [
+            int(round(0xFFFF * math.sin(math.pi / (2 * microsteps) * i)))
+            for i in range(microsteps + 1)
+        ]
+        stepper._current_microstep = 0
+        stepper._microsteps = microsteps
+        stepper._update_coils()
+
 def setup():
     '''Sets up the global variables and surrounding environment'''
+
+    # GPIO setup
     GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
     GPIO.setup(SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
     # set pull up resistor
     GPIO.setup(BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    for stepper in [HEAD_STEPPER, PAPER_STEPPER]:
+        set_microsteps(stepper, MICROSTEPS)
+
     HEAD_STEPPER.release()
     PAPER_STEPPER.release()
 
@@ -104,7 +121,7 @@ def start_print_head() -> None:
     move_stepper_n_steps(HEAD_STEPPER, RESET_STEPS)
 
 def new_line() -> None:
-    move_stepper_n_steps(PAPER_STEPPER, NEW_LINE_STEPS)
+    move_stepper_n_steps(PAPER_STEPPER, -NEW_LINE_STEPS)
     reset_print_head()
     start_print_head()
 
@@ -123,9 +140,12 @@ def move_stepper_n_steps(motor: stepper.StepperMotor, n: int) -> None:
     '''
     # if n > 0, for motor1 step backward 
     # if n > 0, for motor0 step forward 
+    # xor acts as selective invertor
     dir = stepper.FORWARD if ((n > 0) ^ (motor == HEAD_STEPPER)) else stepper.BACKWARD
 
-    for _ in range(n):
+    # we've selected the direction above based on the sign of n
+    # so we can just print for the absolute value of n here
+    for _ in range(abs(n)):
         motor.onestep(direction = dir, style=stepper.MICROSTEP)
 
     motor.release()
@@ -234,18 +254,25 @@ def encode_char(char: str) -> None:
     #
     ##########
 
+    if char == '\n':
+        new_line()
+        return
+
     DEBUG and print("encode_char(): printing " + char)
     try:
         unicode_braille = ascii2braille(char)
     except Exception as e:
         DEBUG and print(e)
         return
-    
+
     DEBUG and print("encode_char(): printing (braille) " + unicode_braille)
     array_braille = braille2array(unicode_braille)
+
     # second half first because paper is punched upside down, 
     # so the characters need to be vertically reflected 
+    sleep(SOL_PAUSE)
     print_half_character(*array_braille[1], serial_solenoids=SERIAL_SOLENOIDS)
+    sleep(SOL_PAUSE)
     print_half_character(*array_braille[0], serial_solenoids=SERIAL_SOLENOIDS)
     move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - (2 * HALF_CHAR_STEPS)) # 2x because two half chars were already printed
 
