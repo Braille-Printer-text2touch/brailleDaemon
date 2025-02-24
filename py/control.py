@@ -9,11 +9,17 @@ import math
 # Settings
 ######
 PIPE_PATH = "/var/run/user/1000/text2type_pipe"
-CHARS_PER_LINE = 30
+CHARS_PER_LINE = 30 # how many characters can be printed horizontally per line
 DEBUG = True
-SOL_PAUSE = 0.1 # was able to get this down to 0.1
-MICROSTEPS_IN_ROT = 16
-SERIAL_SOLENOIDS = True
+
+### Solenoids
+SERIAL_SOLENOIDS = True # whether or not the solenoids fire in serial (one after another) or all at the same time
+SOL_PAUSE = 0.5 # how long to wait after firing a solenoid
+SOL_DUTY_CYCLE = 0.5 # PWM duty cycle (0-1)
+SOL_PWM_FREQ = 200 # PWM frequency (Hz)
+PWM_SOLENOIDS: list[GPIO.PWM] | None = None # the actual PWM instances to drive in the code (setup in setup())
+
+### Stepper Motors
 MICROSTEPS = 4
 
 ### Various GPIO aliases (numbers in BCM)
@@ -21,28 +27,37 @@ SOL_0  = 27
 SOL_1  = 23
 SOL_2  = 17
 BUTTON = 20
+########
 
-## Various precalculated steps
-HALF_CHAR_STEPS   = int(12.125  * MICROSTEPS)
-SPACE_STEPS       = int(31.25   * MICROSTEPS)
-NEW_LINE_STEPS    = int(21.3125 * MICROSTEPS)
-RESET_STEPS       = int(165.5   * MICROSTEPS)
+########
+# Globals
+######
+KIT = MotorKit()
 ########
 
 ########
 # Helpful things
 ######
 SOL_CHANNELS = (SOL_0, SOL_1, SOL_2)
-KIT = MotorKit()
+BRAILLE_JUMP = "⠀⠮⠐⠼⠫⠩⠯⠄⠷⠾⠡⠬⠠⠤⠨⠌⠴⠂⠆⠒⠲⠢⠖⠶⠦⠔⠱⠰⠣⠿⠜⠹⠈⠁⠃⠉⠙⠑⠋⠛⠓⠊⠚⠅⠇⠍⠝⠕⠏⠟⠗⠎⠞⠥⠧⠺⠭⠽⠵⠪⠳⠻⠘⠸"
+STEPS_PER_ROTATION = 200 * MICROSTEPS
+
+### Aliases
 HEAD_STEPPER = KIT.stepper2
 PAPER_STEPPER = KIT.stepper1
-assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
-BRAILLE_JUMP = "⠀⠮⠐⠼⠫⠩⠯⠄⠷⠾⠡⠬⠠⠤⠨⠌⠴⠂⠆⠒⠲⠢⠖⠶⠦⠔⠱⠰⠣⠿⠜⠹⠈⠁⠃⠉⠙⠑⠋⠛⠓⠊⠚⠅⠇⠍⠝⠕⠏⠟⠗⠎⠞⠥⠧⠺⠭⠽⠵⠪⠳⠻⠘⠸"
-STEPS_PER_ROTATION = 200 * MICROSTEPS_IN_ROT
 
-## Physical Sizes (mm)
+### Physical Sizes (mm)
 PAPER_STEPPER_DIAMETER = 30.1625
 HEAD_STEPPER_DIAMETER = 12.7
+
+### Various precalculated steps
+HALF_CHAR_STEPS   = int(12.125  * MICROSTEPS)
+SPACE_STEPS       = int(31.25   * MICROSTEPS)
+NEW_LINE_STEPS    = int(21.3125 * MICROSTEPS)
+RESET_STEPS       = int(165.5   * MICROSTEPS)
+
+### Assertions
+assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
 ########
 
 ########
@@ -53,21 +68,25 @@ BrailleArray = tuple[BrailleHalfChar, BrailleHalfChar]
 ########
 
 def set_microsteps(stepper, microsteps):
-        stepper._curve = [
-            int(round(0xFFFF * math.sin(math.pi / (2 * microsteps) * i)))
-            for i in range(microsteps + 1)
-        ]
-        stepper._current_microstep = 0
-        stepper._microsteps = microsteps
-        stepper._update_coils()
+    stepper._curve = [
+        int(round(0xFFFF * math.sin(math.pi / (2 * microsteps) * i)))
+        for i in range(microsteps + 1)
+    ]
+    stepper._current_microstep = 0
+    stepper._microsteps = microsteps
+    stepper._update_coils()
 
 def setup():
     '''Sets up the global variables and surrounding environment'''
 
-    # GPIO setup
+    # solenoid GPIO setup
     GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
     GPIO.setup(SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
-    # set pull up resistor
+
+    global PWM_SOLENOIDS
+    PWM_SOLENOIDS = [GPIO.PWM(channel, SOL_PWM_FREQ) for channel in SOL_CHANNELS]
+
+    # set pull up resistor on button
     GPIO.setup(BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     for stepper in [HEAD_STEPPER, PAPER_STEPPER]:
@@ -162,6 +181,9 @@ def print_half_character(*sol_values: bool, serial_solenoids=True) -> None:
     Returns:
         None
     '''
+    if PWM_SOLENOIDS is None:
+        raise ValueError("PWM_SOLENOIDS cannot be None. Ensure setup() is run first.")
+
     if len(sol_values) != 3:
         raise ValueError("print_half_character(): need exactly three values for solenoids")
 
@@ -170,16 +192,20 @@ def print_half_character(*sol_values: bool, serial_solenoids=True) -> None:
     if sum(sol_values) > 0:
         if serial_solenoids:
             for i in range(3):
-                GPIO.output(SOL_CHANNELS[i], sol_values[i])
-                sleep(SOL_PAUSE)
-                GPIO.output(SOL_CHANNELS[i], GPIO.LOW)
-                sleep(SOL_PAUSE)
+                # GPIO.output(SOL_CHANNELS[i], sol_values[i])
+                if sol_values[i]: # if this solenoid should fire
+                    PWM_SOLENOIDS[i].start(SOL_DUTY_CYCLE)
+                    sleep(SOL_PAUSE)
+                    PWM_SOLENOIDS[i].stop()
+                    sleep(SOL_PAUSE)
         else:
-            GPIO.output(SOL_CHANNELS, sol_values)
+            for i in range(3):
+                if sol_values[i]: # if this solenoid should fire
+                    PWM_SOLENOIDS[i].start(SOL_DUTY_CYCLE)
             sleep(SOL_PAUSE)
-            GPIO.output(SOL_CHANNELS, GPIO.LOW)
+            for i in range(3):
+                PWM_SOLENOIDS[i].stop()
             sleep(SOL_PAUSE)
-    move_stepper_n_steps(HEAD_STEPPER, HALF_CHAR_STEPS)
 
 def ascii2braille(c: str) -> str:
     '''
@@ -272,9 +298,11 @@ def encode_char(char: str) -> None:
     # so the characters need to be vertically reflected 
     sleep(SOL_PAUSE)
     print_half_character(*array_braille[1], serial_solenoids=SERIAL_SOLENOIDS)
+    move_stepper_n_steps(HEAD_STEPPER, HALF_CHAR_STEPS)
+
     sleep(SOL_PAUSE)
     print_half_character(*array_braille[0], serial_solenoids=SERIAL_SOLENOIDS)
-    move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - (2 * HALF_CHAR_STEPS)) # 2x because two half chars were already printed
+    move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - HALF_CHAR_STEPS) # because one half char was already printed
 
 def encode_string(s: str) -> None:
     '''
