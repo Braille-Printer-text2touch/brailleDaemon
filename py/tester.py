@@ -37,26 +37,15 @@ if input("Test steppers? (y/N) ").lower() == 'y':
     sleep(1)
 
 if input("Test solenoids? (y/N) ").lower() == 'y':
-    print("Testing solenoid 0")
-    GPIO.output(control.SOL_0, GPIO.HIGH)
-    sleep(control.SOL_PAUSE)
-    GPIO.output(control.SOL_0, GPIO.LOW)
-    sleep(control.SOL_PAUSE)
-    sleep(1)
-
-    print("Testing solenoid 1")
-    GPIO.output(control.SOL_1, GPIO.HIGH)
-    sleep(control.SOL_PAUSE)
-    GPIO.output(control.SOL_1, GPIO.LOW)
-    sleep(control.SOL_PAUSE)
-    sleep(1)
-
-    print("Testing solenoid 2")
-    GPIO.output(control.SOL_2, GPIO.HIGH)
-    sleep(control.SOL_PAUSE)
-    GPIO.output(control.SOL_2, GPIO.LOW)
-    sleep(control.SOL_PAUSE)
-    sleep(3)
+    if control.PWM_SOLENOIDS is not None:
+        for i in range(3):
+            print(f"Testing solenoid {i}")
+            control.PWM_SOLENOIDS[i].start(control.SOL_DUTY_CYCLE)
+            sleep(control.SOL_PAUSE)
+            control.PWM_SOLENOIDS[i].stop()
+            sleep(control.SOL_PAUSE)
+    else:
+        print("PWM_SOLENOIDS is None. Please run setup() first")
 
 if input("Test button? (y/N) ").lower() == 'y':
     print("Waiting for button press")
@@ -69,10 +58,12 @@ if input("Test button? (y/N) ").lower() == 'y':
         and input("Are you sure? (y/N) ") == 'y'
     ):
         control.reset_print_head()
-        
+
         if input("Start print head? (y/N) ") == 'y':
             control.start_print_head()
 
+if input("Test new line? \033[33mBUTTON SHOULD BE TESTED AND WORKING\033[0m (y/N) ").lower() == 'y':
+    control.new_line()
 
 if input("Test braille printing in terminal? (y/N) ").lower() == 'y':
     while s := input("Enter string to see braille encoding, or nothing to end. DON'T CTRL-C!\n"):
@@ -88,7 +79,10 @@ if input("Test braille printing w/ hardware? (y/N) ").lower() == 'y':
         control.encode_string(s)
 
 if input("Test with test message? (y/N) ").lower() == 'y':
+    control.reset_print_head()
+    control.start_print_head()
     for line in TEST_MESSAGE.split("\n"):
         control.encode_string(line)
+    control.eject_paper()
 
 control.cleanup()

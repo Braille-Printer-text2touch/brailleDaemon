@@ -15,8 +15,8 @@ DEBUG = True
 ### Solenoids
 SERIAL_SOLENOIDS = True # whether or not the solenoids fire in serial (one after another) or all at the same time
 SOL_PAUSE = 0.5 # how long to wait after firing a solenoid
-SOL_DUTY_CYCLE = 0.5 # PWM duty cycle (0-1)
-SOL_PWM_FREQ = 200 # PWM frequency (Hz)
+SOL_DUTY_CYCLE = 50 # PWM duty cycle (0.0-100.0)
+SOL_PWM_FREQ = 800 # PWM frequency (Hz)
 PWM_SOLENOIDS: list[GPIO.PWM] | None = None # the actual PWM instances to drive in the code (setup in setup())
 
 ### Stepper Motors
@@ -51,10 +51,13 @@ PAPER_STEPPER_DIAMETER = 30.1625
 HEAD_STEPPER_DIAMETER = 12.7
 
 ### Various precalculated steps
-HALF_CHAR_STEPS   = int(12.125  * MICROSTEPS)
-SPACE_STEPS       = int(31.25   * MICROSTEPS)
-NEW_LINE_STEPS    = int(21.3125 * MICROSTEPS)
-RESET_STEPS       = int(165.5   * MICROSTEPS)
+#### Integer values come from official ADA Braille standards (in mm)
+#### or measurements
+HALF_CHAR_STEPS   = int(2.4      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+SPACE_STEPS       = int(6.85     / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+RESET_STEPS       = int(34       / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+NEW_LINE_STEPS    = int(10.1     / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
+EJECT_STEPS       = int(279      / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
 
 ### Assertions
 assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
@@ -143,6 +146,9 @@ def new_line() -> None:
     move_stepper_n_steps(PAPER_STEPPER, -NEW_LINE_STEPS)
     reset_print_head()
     start_print_head()
+
+def eject_paper() -> None:
+    move_stepper_n_steps(PAPER_STEPPER, -EJECT_STEPS)
 
 def mm_to_steps(circumference_mm: float, n_mm: float) -> int:
     return int(n_mm / (circumference_mm / STEPS_PER_ROTATION)) # return number of steps to move n_mm
@@ -284,14 +290,14 @@ def encode_char(char: str) -> None:
         new_line()
         return
 
-    DEBUG and print("encode_char(): printing " + char)
+    _ = DEBUG and print("encode_char(): printing " + char)
     try:
         unicode_braille = ascii2braille(char)
     except Exception as e:
-        DEBUG and print(e)
+        _ = DEBUG and print(e)
         return
 
-    DEBUG and print("encode_char(): printing (braille) " + unicode_braille)
+    _ = DEBUG and print("encode_char(): printing (braille) " + unicode_braille)
     array_braille = braille2array(unicode_braille)
 
     # second half first because paper is punched upside down, 
@@ -314,13 +320,13 @@ def encode_string(s: str) -> None:
     Returns:
         None
     '''
-    DEBUG and print("encode_string(): printing " + s)
+    _ = DEBUG and print("encode_string(): printing " + s)
     chunk = 0 # start at the first chunk of the string
     chars_to_print = len(s) # keep track of how many characters we've printed
     while chars_to_print > 0:
         in_index = chunk * CHARS_PER_LINE
         out_index = in_index + min(CHARS_PER_LINE, chars_to_print)
-        DEBUG and print(f"encode_string(): chunk {chunk} '{s[in_index:out_index]}'")
+        _ = DEBUG and print(f"encode_string(): chunk {chunk} '{s[in_index:out_index]}'")
 
         for char in reversed(s[in_index:out_index]):
             encode_char(char)
