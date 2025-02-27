@@ -25,3 +25,7 @@ Will use the [wiringpi](https://github.com/WiringPi/WiringPi) or [lgpio](https:/
 The braille alphabet, for reference:
 
 ![Braille Alphabet picture should be here...](https://www.tsbvi.edu/wp-content/uploads/assets/images/in-body/fw-ibi-braille_alphabet.jpg)
+
+Common braille contractions and punctuation, for reference:
+
+![Braille Contractions picture should be here...](./resources/braille-quick-reference.png)
