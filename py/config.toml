@@ -1,0 +1,32 @@
+[STEPPERS]
+STEPPER_DEGREES=1.8
+MICROSTEPS=4
+
+[SOLENOIDS]
+# whether or not the solenoids fire in serial (one after another) or all at the same time
+SERIAL_SOLENOIDS=true
+# how long to wait after firing a solenoid
+SOL_PAUSE=0.5
+# PWM duty cycle (0.0-100.0)
+SOL_DUTY_CYCLE=50
+# PWM frequency (Hz)
+SOL_PWM_FREQ=800
+
+# pins are in BCM numbering
+[PINS]
+SOL_0_PIN=27
+SOL_1_PIN=23
+SOL_2_PIN=17
+BUTTON_PIN=20
+
+# all sizes in millimeters
+[SIZES]
+PAPER_STEPPER_DIAMETER=30.1625
+HEAD_STEPPER_DIAMETER=12.7
+HALF_CHAR_STEPS=3.051
+SPACE_STEPS=7.861
+RESET_STEPS=40
+NEW_LINE_STEPS=9.652
+EJECT_STEPS=279
+# how many characters can be printed horizontally per line
+CHARS_PER_LINE=30

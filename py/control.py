@@ -5,119 +5,70 @@ from adafruit_motorkit import MotorKit
 import RPi.GPIO as GPIO
 from time import sleep
 import math
+from transcriber import BrailleTranscriber
 import tomllib
 
-#########
-# Settings
-######
-CHARS_PER_LINE = 30 # how many characters can be printed horizontally per line
 DEBUG = True
 
-### Solenoids
-SERIAL_SOLENOIDS = True # whether or not the solenoids fire in serial (one after another) or all at the same time
-SOL_PAUSE = 0.5 # how long to wait after firing a solenoid
-SOL_DUTY_CYCLE = 50 # PWM duty cycle (0.0-100.0)
-SOL_PWM_FREQ = 800 # PWM frequency (Hz)
-PWM_SOLENOIDS: list[GPIO.PWM] | None = None # the actual PWM instances to drive in the code (setup in setup())
-
-### Stepper Motors
-MICROSTEPS = 4
-
-### Various GPIO aliases (numbers in BCM)
-SOL_0  = 27
-SOL_1  = 23
-SOL_2  = 17
-BUTTON = 20
-########
-
-########
-# Globals
-######
-KIT = MotorKit()
-########
-
-########
-# Helpful things
-######
-SOL_CHANNELS = (SOL_0, SOL_1, SOL_2)
-STEPS_PER_ROTATION = 200 * MICROSTEPS
-
-### Aliases
-HEAD_STEPPER = KIT.stepper2
-PAPER_STEPPER = KIT.stepper1
-
-### Physical Sizes (mm)
-PAPER_STEPPER_DIAMETER = 30.1625
-HEAD_STEPPER_DIAMETER = 12.7
-
-### Various precalculated steps
-#### Integer values come from official ADA Braille standards (in mm)
-#### or measurements
-HALF_CHAR_STEPS   = int(2.4      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
-SPACE_STEPS       = int(6.85     / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
-RESET_STEPS       = int(34       / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
-NEW_LINE_STEPS    = int(10.1     / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
-EJECT_STEPS       = int(279      / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
-
-### Assertions
-assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
-########
-
-########
-# Type definitions
-######
-BrailleHalfChar = tuple[bool, bool, bool]
-BrailleArray = tuple[BrailleHalfChar, BrailleHalfChar]
-########
-
-def __toml_open_and_load(file_path: str) -> dict[str, Any]:
-    with open(file_path, "rb") as f:
-        return tomllib.load(f)
-
 class BraillePrinterDriver:
-    def __new__(cls):
-        # load all the toml files for transliteration
-        # these are class variables because they are shared across all instances
-        cls.BRAILLE_JUMP = "⠀⠮⠐⠼⠫⠩⠯⠄⠷⠾⠡⠬⠠⠤⠨⠌⠴⠂⠆⠒⠲⠢⠖⠶⠦⠔⠱⠰⠣⠿⠜⠹⠈⠁⠃⠉⠙⠑⠋⠛⠓⠊⠚⠅⠇⠍⠝⠕⠏⠟⠗⠎⠞⠥⠧⠺⠭⠽⠵⠪⠳⠻⠘⠸"
-        cls.BRAILLE_SHORTFORMS    = __toml_open_and_load("../brailleTransliterations/shortforms.toml")
-        cls.ALPHABETIC_WORD_SIGNS = __toml_open_and_load("../brailleTransliterations/alphabetic-word-signs.toml")
-        cls.STRONG_CONTRACTIONS   = __toml_open_and_load("../brailleTransliterations/strong-contractions.toml")
-        cls.LOWER_CONTRACTIONS    = __toml_open_and_load("../brailleTransliterations/lower-contractions.toml")
-        cls.DOT_56_FINAL_LETTER   = __toml_open_and_load("../brailleTransliterations/dot-56.toml")
-        cls.DOT_46_FINAL_LETTER   = __toml_open_and_load("../brailleTransliterations/dot-46.toml")
-        cls.DOT_5_WORDS           = __toml_open_and_load("../brailleTransliterations/dot-5.toml")
-        cls.DOT_45_WORDS          = __toml_open_and_load("../brailleTransliterations/dot-45.toml")
-        cls.DOT_456_WORDS         = __toml_open_and_load("../brailleTransliterations/dot-456.toml")
-        cls.BRAILLE_SPECIAL_SYMBOLS = __toml_open_and_load("../brailleTransliterations/special-symbols.toml")
+    with open("config.toml", "rb") as f:
+        config = tomllib.load(f)
+    motor_kit = MotorKit()
 
-    def __init__(self, head_stepper: stepper.StepperMotor, paper_stepper: stepper.StepperMotor) -> None:
-        self.head_stepper = head_stepper
-        self.paper_stepper = paper_stepper
+    CHARS_PER_LINE = config["SIZES"]["CHARS_PER_LINE"]
+    SERIAL_SOLENOIDS = config["SOLENOIDS"]["SERIAL_SOLENOIDS"]
+    SOL_PAUSE = config["SOLENOIDS"]["SOL_PAUSE"]
+    SOL_DUTY_CYCLE = config["SOLENOIDS"]["SOL_DUTY_CYCLE"]
+    SOL_PWM_FREQ = config["SOLENOIDS"]["SOL_PWM_FREQ"]
+    MICROSTEPS = config["STEPPERS"]["MICROSTEPS"]
+    SOL_0_PIN  = config["PINS"]["SOL_0_PIN"]
+    SOL_1_PIN  = config["PINS"]["SOL_1_PIN"]
+    SOL_2_PIN  = config["PINS"]["SOL_2_PIN"]
+    BUTTON_PIN = config["PINS"]["BUTTON_PIN"]
+    PAPER_STEPPER_DIAMETER = config["SIZES"]["PAPER_STEPPER_DIAMETER"]
+    HEAD_STEPPER_DIAMETER = config["SIZES"]["HEAD_STEPPER_DIAMETER"]
+    STEPPER_DEGREES = config["STEPPERS"]["STEPPER_DEGREES"]
+
+    SOL_CHANNELS      = (config["SOL_0"], config["SOL_1"], config["SOL_2"])
+    STEPS_PER_ROTATION = int(360 / STEPPER_DEGREES) * MICROSTEPS
+    HALF_CHAR_STEPS   = int(config["SIZES"]["HALF_CHAR_STEPS"]  / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    SPACE_STEPS       = int(config["SIZES"]["SPACE_STEPS"]      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    RESET_STEPS       = int(config["SIZES"]["RESET_STEPS"]      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    NEW_LINE_STEPS    = int(config["SIZES"]["NEW_LINE_STEPS"]   / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    EJECT_STEPS       = int(config["SIZES"]["EJECT_STEPS"]      / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
+
+    def __init__(self) -> None:
+        assert(self.SPACE_STEPS >= 2 * self.HALF_CHAR_STEPS)
+
+        self.head_stepper = self.motor_kit.stepper2
+        self.paper_stepper = self.motor_kit.stepper1
 
         # solenoid GPIO setup
         GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
-        GPIO.setup(SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
+        GPIO.setup(self.SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
 
-        self.PWM_SOLENOIDS = [GPIO.PWM(channel, SOL_PWM_FREQ) for channel in SOL_CHANNELS]
+        self.pwm_solenoids: list[GPIO.PWM] = [GPIO.PWM(channel, self.SOL_PWM_FREQ) for channel in self.SOL_CHANNELS]
 
         # set pull up resistor on button
-        GPIO.setup(BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(self.BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
         # stepper motor setup
         for stepper in [self.head_stepper, self.paper_stepper]:
-            self.set_microsteps(stepper, MICROSTEPS)
+            self.set_microsteps(stepper, self.MICROSTEPS)
 
         # ensure steppers are released
-        HEAD_STEPPER.release()
-        PAPER_STEPPER.release()
+        self.head_stepper.release()
+        self.paper_stepper.release()
+
+        self.transcriber = BrailleTranscriber()
         
-        self.__diagnostic_message = "Machine up and running\n"
+        self.__diagnostic_message = "0: Machine up and running\n"
 
     def __del__(self):
         '''Clean up resources used and stop hold current on steppers'''
         GPIO.cleanup()
-        HEAD_STEPPER.release()
-        PAPER_STEPPER.release()
+        self.head_stepper.release()
+        self.paper_stepper.release()
 
     def set_microsteps(self, stepper, microsteps):
         '''
@@ -140,7 +91,7 @@ class BraillePrinterDriver:
             None
         '''
         # reach edge of enclosure
-        while GPIO.input(BUTTON) == GPIO.HIGH:
+        while GPIO.input(self.BUTTON_PIN) == GPIO.HIGH:
             self.head_stepper.onestep(style=stepper.MICROSTEP)
 
         self.head_stepper.release()
@@ -155,18 +106,18 @@ class BraillePrinterDriver:
             None
         '''
         # move over to start of line
-        self.move_stepper_n_steps(self.head_stepper, RESET_STEPS)
+        self.__move_stepper_n_steps(self.head_stepper, self.RESET_STEPS)
 
     def new_line(self) -> None:
-        self.move_stepper_n_steps(self.paper_stepper, -NEW_LINE_STEPS)
+        self.__move_stepper_n_steps(self.paper_stepper, -self.NEW_LINE_STEPS)
         self.reset_print_head()
         self.start_print_head()
 
     def eject_paper(self) -> None:
-        self.move_stepper_n_steps(self.paper_stepper, -EJECT_STEPS)
+        self.__move_stepper_n_steps(self.paper_stepper, -self.EJECT_STEPS)
 
     def __mm_to_steps(self, circumference_mm: float, n_mm: float) -> int:
-        return int(n_mm / (circumference_mm / STEPS_PER_ROTATION)) # return number of steps to move n_mm
+        return int(n_mm / (circumference_mm / self.STEPS_PER_ROTATION)) # return number of steps to move n_mm
 
     def __move_stepper_n_steps(self, motor: stepper.StepperMotor, n: int) -> None:
         '''
@@ -202,9 +153,6 @@ class BraillePrinterDriver:
         Returns:
             None
         '''
-        if PWM_SOLENOIDS is None:
-            raise ValueError("PWM_SOLENOIDS cannot be None. Ensure setup() is run first.")
-
         if len(sol_values) != 3:
             raise ValueError("print_half_character(): need exactly three values for solenoids")
 
@@ -215,71 +163,18 @@ class BraillePrinterDriver:
                 for i in range(3):
                     # GPIO.output(SOL_CHANNELS[i], sol_values[i])
                     if sol_values[i]: # if this solenoid should fire
-                        PWM_SOLENOIDS[i].start(SOL_DUTY_CYCLE)
-                        sleep(SOL_PAUSE)
-                        PWM_SOLENOIDS[i].stop()
-                        sleep(SOL_PAUSE)
+                        self.pwm_solenoids[i].start(self.SOL_DUTY_CYCLE)
+                        sleep(self.SOL_PAUSE)
+                        self.pwm_solenoids[i].stop()
+                        sleep(self.SOL_PAUSE)
             else:
                 for i in range(3):
                     if sol_values[i]: # if this solenoid should fire
-                        PWM_SOLENOIDS[i].start(SOL_DUTY_CYCLE)
-                sleep(SOL_PAUSE)
+                        self.PWM_SOLENOIDS[i].start(self.SOL_DUTY_CYCLE)
+                sleep(self.SOL_PAUSE)
                 for i in range(3):
-                    PWM_SOLENOIDS[i].stop()
-                sleep(SOL_PAUSE)
-
-    @staticmethod
-    def ascii2braille(c: str) -> str:
-        '''
-        Takes a unicode character in the range 0x20 (SPACE) to 0x5F (underscore) and 
-        returns its unicode brialle representation.
-
-        The ASCII characters to be translated to braille exist in the range 0x20 (SPACE)
-        to 0x5F (underscore), thus determining the chracter in question is a simple substraction from 0x20
-        which can then be used to index a specially crafted string as a jump table
-
-        Inputs:
-            c: str, the character to transliterate
-        Outputs:
-            str: the transliterated braille character (unicode)
-        '''
-        # only uppercase characters are in the proper range
-        ascii_offset = ord(c.upper()) - 0x20
-        if not (0x0 <= ascii_offset <= 0x3F):
-            # out of range
-            raise Exception("Unsupported character")
-    
-        return BraillePrinterDriver.BRAILLE_JUMP[ascii_offset]
-
-    @staticmethod
-    def braille2array(b: str) -> BrailleArray:
-        '''
-        Takes a braille unicode character and returns its array representation for 
-        running the solenoids.
-        
-        Braille characters start at 0x2800 and, for the first 0x3F characters,
-        increment by counting in binary down the left column then down the right column
-        Example:
-            0x101110
-        is
-            .
-            .
-            . .
-
-        Inputs:
-            b: str, the utf8 braille character to convert
-        Outputs:
-            BrailleArray: the character represented by two BrailleHalfChar
-        '''
-        braille_offset = ord(b) - 0x2800
-        if not (0x0 <= braille_offset <= 0x3F):
-            # out of range
-            raise Exception("Unsupported character")
-
-        return (
-                (bool(braille_offset & 1 << 0), bool(braille_offset & 1 << 1), bool(braille_offset & 1 << 2)),
-                (bool(braille_offset & 1 << 3), bool(braille_offset & 1 << 4), bool(braille_offset & 1 << 5))
-            )
+                    self.PWM_SOLENOIDS[i].stop()
+                sleep(self.SOL_PAUSE)
 
     def encode_char(self, char: str) -> None:
         '''
@@ -309,28 +204,28 @@ class BraillePrinterDriver:
 
         _ = DEBUG and print("encode_char(): printing " + char)
         try:
-            unicode_braille = self.ascii2braille(char)
+            unicode_braille = self.transcriber.ascii2braille(char)
         except Exception as e:
             _ = DEBUG and print(e)
             return
 
         _ = DEBUG and print("encode_char(): printing (braille) " + unicode_braille)
-        array_braille = self.braille2array(unicode_braille)
+        array_braille = self.transcriber.braille2array(unicode_braille)
 
         # second half first because paper is punched upside down, 
         # so the characters need to be vertically reflected 
-        sleep(SOL_PAUSE)
-        self.print_half_character(*array_braille[1], serial_solenoids=SERIAL_SOLENOIDS)
-        self.move_stepper_n_steps(self.head_stepper, HALF_CHAR_STEPS)
+        sleep(self.SOL_PAUSE)
+        self.__print_half_character(*array_braille[1], serial_solenoids=self.SERIAL_SOLENOIDS)
+        self.__move_stepper_n_steps(self.head_stepper, self.HALF_CHAR_STEPS)
 
-        sleep(SOL_PAUSE)
-        self.print_half_character(*array_braille[0], serial_solenoids=SERIAL_SOLENOIDS)
-        self.move_stepper_n_steps(self.head_stepper, SPACE_STEPS - HALF_CHAR_STEPS) # because one half char was already printed
+        sleep(self.SOL_PAUSE)
+        self.__print_half_character(*array_braille[0], serial_solenoids=self.SERIAL_SOLENOIDS)
+        self.__move_stepper_n_steps(self.head_stepper, self.SPACE_STEPS - self.HALF_CHAR_STEPS) # because one half char was already printed
 
     def encode_string(self, s: str) -> None:
         '''
         Print a string of characters onto the paper. This will handle chunking and 
-        putting the characters in the correct order.
+        putting the characters in the correct order, along with transliterations.
 
         Args:
             s (string): The string to be printed
@@ -338,14 +233,18 @@ class BraillePrinterDriver:
             None
         '''
         _ = DEBUG and print("encode_string(): printing " + s)
-        chunk = 0 # start at the first chunk of the string
-        chars_to_print = len(s) # keep track of how many characters we've printed
-        while chars_to_print > 0:
-            in_index = chunk * CHARS_PER_LINE
-            out_index = in_index + min(CHARS_PER_LINE, chars_to_print)
-            _ = DEBUG and print(f"encode_string(): chunk {chunk} '{s[in_index:out_index]}'")
+        transliterated_s = self.transcriber.transliterate_string(s)
+        _ = DEBUG and print("encode_string(): printing (transliterated)" + transliterated_s)
 
-            for char in reversed(s[in_index:out_index]):
+        chunk = 0 # start at the first chunk of the string
+        chars_to_print = len(transliterated_s) # keep track of how many characters we've printed
+
+        while chars_to_print > 0:
+            in_index = chunk * self.CHARS_PER_LINE
+            out_index = in_index + min(self.CHARS_PER_LINE, chars_to_print)
+            _ = DEBUG and print(f"encode_string(): chunk {chunk} '{transliterated_s[in_index:out_index]}'")
+
+            for char in reversed(transliterated_s[in_index:out_index]):
                 self.encode_char(char)
 
             # difference between out_index and in_index 
@@ -357,92 +256,9 @@ class BraillePrinterDriver:
         self.head_stepper.release()
         self.paper_stepper.release()
 
-    def transliterate_string(self, s: str) -> str:
-        '''
-        Take a string composed of ASCII characters (0x20-0x5F) and apply Braille 
-        contractions, shorthands, and punctuation.
-        This string can then be sent to encode_string() to be printed.
-
-        The string should NOT have new lines present.
-
-        Args:
-            s (string): The string to be transliterated, devoid of new lines
-        Returns:
-            string, the transliterated string
-        '''
-        words = s.split(" ")
-        transliterated_words: list[str] = []
-        for word in words:
-            # shortforms
-            if word in self.BRAILLE_SHORTFORMS:
-                transliterated_words.append(self.BRAILLE_SHORTFORMS[word])
-
-            # numbers
-            elif word.isnumeric():
-                transliterated_words.append('#' + word) # prefix with number prefix '#'
-
-            # special symbols
-            # TODO: these might move into a different translation section, when we go symbol by symbol
-
-            # alphabetic word signs
-            elif word in self.ALPHABETIC_WORD_SIGNS:
-                transliterated_words.append(self.ALPHABETIC_WORD_SIGNS[word])
-
-            # contractions
-            elif word in self.STRONG_CONTRACTIONS:
-                transliterated_words.append(self.STRONG_CONTRACTIONS[word])
-            elif word in self.LOWER_CONTRACTIONS:
-                transliterated_words.append(self.LOWER_CONTRACTIONS[word])
-
-            # final-letter combinations
-            # try to replace the suffix and see if anything changed
-            # if so, add the changed word
-            elif (suffix_word := self.__replace_suffixes(self.DOT_56_FINAL_LETTER, word)) != word:
-                transliterated_words.append(suffix_word)
-            elif (suffix_word := self.__replace_suffixes(self.DOT_46_FINAL_LETTER, word)) != word:
-                transliterated_words.append(suffix_word)
-
-            # more contractions!
-            elif word in self.DOT_5_WORDS:
-                transliterated_words.append(self.DOT_5_WORDS[word])
-            elif word in self.DOT_45_WORDS:
-                transliterated_words.append(self.DOT_45_WORDS[word])
-            elif word in self.DOT_456_WORDS:
-                transliterated_words.append(self.DOT_45_WORDS[word])
-
-            # if nothing else, just add the word
-            else:
-                transliterated_words.append(word)
-
-        transliterated_string = " ".join(transliterated_words) # add spaces between processed words
-        return self.__transliterate_symbols(transliterated_string)
-
     def write_diagnostic_message(self, output: TextIO) -> None:
         '''
-        Sends a diagnostic message to the user. This can be used to print out
+        Sends a diagnostic message to some writable output. This can be used to print out
         any errors or debug information.
         '''
         output.write(self.__diagnostic_message)
-
-    @staticmethod
-    def __replace_suffixes(suffixes: dict, word: str) -> str:
-        for suffix in suffixes.keys():
-            if word.endswith(suffix):
-                return word.removesuffix(suffix) + suffixes[suffix]
-        return word
-    
-    @staticmethod
-    def __replace_prefix(prefixes: dict, word: str) -> str:
-        for prefix in prefixes.keys():
-            if word.startswith(prefix):
-                return word.removeprefix(prefix) + prefixes[prefix]
-        return word
-
-    def __transliterate_symbols(self, s: str) -> str:
-        all_chars = list(s)
-
-        for index, c in enumerate(all_chars):
-            if c in self.BRAILLE_SPECIAL_SYMBOLS:
-                all_chars[index] = self.BRAILLE_SPECIAL_SYMBOLS[c]
-
-        return "".join(all_chars)
