@@ -1,341 +1,264 @@
+from typing import Any, TextIO
 # gives access to SINGLE, DOUBLE, FORWARD, BACKWARD, INTERLEAVE, MICROSTEP
 from adafruit_motor import stepper
 from adafruit_motorkit import MotorKit
 import RPi.GPIO as GPIO
 from time import sleep
 import math
+from transcriber import BrailleTranscriber
+import tomllib
 
-#########
-# Settings
-######
-PIPE_PATH = "/var/run/user/1000/text2type_pipe"
-CHARS_PER_LINE = 30 # how many characters can be printed horizontally per line
 DEBUG = True
 
-### Solenoids
-SERIAL_SOLENOIDS = True # whether or not the solenoids fire in serial (one after another) or all at the same time
-SOL_PAUSE = 0.5 # how long to wait after firing a solenoid
-SOL_DUTY_CYCLE = 50 # PWM duty cycle (0.0-100.0)
-SOL_PWM_FREQ = 800 # PWM frequency (Hz)
-PWM_SOLENOIDS: list[GPIO.PWM] | None = None # the actual PWM instances to drive in the code (setup in setup())
+class BraillePrinterDriver:
+    with open("config.toml", "rb") as f:
+        config = tomllib.load(f)
+    motor_kit = MotorKit()
 
-### Stepper Motors
-MICROSTEPS = 4
+    CHARS_PER_LINE = config["SIZES"]["CHARS_PER_LINE"]
+    SERIAL_SOLENOIDS = config["SOLENOIDS"]["SERIAL_SOLENOIDS"]
+    SOL_PAUSE = config["SOLENOIDS"]["SOL_PAUSE"]
+    SOL_DUTY_CYCLE = config["SOLENOIDS"]["SOL_DUTY_CYCLE"]
+    SOL_PWM_FREQ = config["SOLENOIDS"]["SOL_PWM_FREQ"]
+    MICROSTEPS = config["STEPPERS"]["MICROSTEPS"]
+    SOL_0_PIN  = config["PINS"]["SOL_0_PIN"]
+    SOL_1_PIN  = config["PINS"]["SOL_1_PIN"]
+    SOL_2_PIN  = config["PINS"]["SOL_2_PIN"]
+    BUTTON_PIN = config["PINS"]["BUTTON_PIN"]
+    PAPER_STEPPER_DIAMETER = config["SIZES"]["PAPER_STEPPER_DIAMETER"]
+    HEAD_STEPPER_DIAMETER = config["SIZES"]["HEAD_STEPPER_DIAMETER"]
+    STEPPER_DEGREES = config["STEPPERS"]["STEPPER_DEGREES"]
 
-### Various GPIO aliases (numbers in BCM)
-SOL_0  = 27
-SOL_1  = 23
-SOL_2  = 17
-BUTTON = 20
-########
+    SOL_CHANNELS      = (config["SOL_0"], config["SOL_1"], config["SOL_2"])
+    STEPS_PER_ROTATION = int(360 / STEPPER_DEGREES) * MICROSTEPS
+    HALF_CHAR_STEPS   = int(config["SIZES"]["HALF_CHAR_STEPS"]  / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    SPACE_STEPS       = int(config["SIZES"]["SPACE_STEPS"]      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    RESET_STEPS       = int(config["SIZES"]["RESET_STEPS"]      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    NEW_LINE_STEPS    = int(config["SIZES"]["NEW_LINE_STEPS"]   / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
+    EJECT_STEPS       = int(config["SIZES"]["EJECT_STEPS"]      / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
 
-########
-# Globals
-######
-KIT = MotorKit()
-########
+    def __init__(self) -> None:
+        assert(self.SPACE_STEPS >= 2 * self.HALF_CHAR_STEPS)
 
-########
-# Helpful things
-######
-SOL_CHANNELS = (SOL_0, SOL_1, SOL_2)
-BRAILLE_JUMP = "⠀⠮⠐⠼⠫⠩⠯⠄⠷⠾⠡⠬⠠⠤⠨⠌⠴⠂⠆⠒⠲⠢⠖⠶⠦⠔⠱⠰⠣⠿⠜⠹⠈⠁⠃⠉⠙⠑⠋⠛⠓⠊⠚⠅⠇⠍⠝⠕⠏⠟⠗⠎⠞⠥⠧⠺⠭⠽⠵⠪⠳⠻⠘⠸"
-STEPS_PER_ROTATION = 200 * MICROSTEPS
+        self.head_stepper = self.motor_kit.stepper2
+        self.paper_stepper = self.motor_kit.stepper1
 
-### Aliases
-HEAD_STEPPER = KIT.stepper2
-PAPER_STEPPER = KIT.stepper1
+        # solenoid GPIO setup
+        GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
+        GPIO.setup(self.SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
 
-### Physical Sizes (mm)
-PAPER_STEPPER_DIAMETER = 30.1625
-HEAD_STEPPER_DIAMETER = 12.7
+        self.pwm_solenoids: list[GPIO.PWM] = [GPIO.PWM(channel, self.SOL_PWM_FREQ) for channel in self.SOL_CHANNELS]
 
-### Various precalculated steps
-#### Integer values come from official ADA Braille standards (in mm)
-#### or measurements
-HALF_CHAR_STEPS   = int(2.4      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
-SPACE_STEPS       = int(6.85     / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
-RESET_STEPS       = int(34       / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
-NEW_LINE_STEPS    = int(10.1     / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
-EJECT_STEPS       = int(279      / ((math.pi * PAPER_STEPPER_DIAMETER) / STEPS_PER_ROTATION))
+        # set pull up resistor on button
+        GPIO.setup(self.BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-### Assertions
-assert(SPACE_STEPS >= 2 * HALF_CHAR_STEPS)
-########
+        # stepper motor setup
+        for stepper in [self.head_stepper, self.paper_stepper]:
+            self.set_microsteps(stepper, self.MICROSTEPS)
 
-########
-# Type definitions
-######
-BrailleHalfChar = tuple[bool, bool, bool]
-BrailleArray = tuple[BrailleHalfChar, BrailleHalfChar]
-########
+        # ensure steppers are released
+        self.head_stepper.release()
+        self.paper_stepper.release()
 
-def set_microsteps(stepper, microsteps):
-    stepper._curve = [
-        int(round(0xFFFF * math.sin(math.pi / (2 * microsteps) * i)))
-        for i in range(microsteps + 1)
-    ]
-    stepper._current_microstep = 0
-    stepper._microsteps = microsteps
-    stepper._update_coils()
+        self.transcriber = BrailleTranscriber()
+        
+        self.__diagnostic_message = "0: Machine up and running\n"
 
-def setup():
-    '''Sets up the global variables and surrounding environment'''
+    def __del__(self):
+        '''Clean up resources used and stop hold current on steppers'''
+        GPIO.cleanup()
+        self.head_stepper.release()
+        self.paper_stepper.release()
 
-    # solenoid GPIO setup
-    GPIO.setmode(GPIO.BCM) # use broadcom (GPIO) pin numbers
-    GPIO.setup(SOL_CHANNELS, GPIO.OUT) # setup solenoid pins
+    def set_microsteps(self, stepper, microsteps):
+        '''
+        Set the microsteps for a stepper motor. "Hijacks" Adafruits library.
+        '''
+        stepper._curve = [
+            int(round(0xFFFF * math.sin(math.pi / (2 * microsteps) * i)))
+            for i in range(microsteps + 1)
+        ]
+        stepper._current_microstep = 0
+        stepper._microsteps = microsteps
+        stepper._update_coils()
 
-    global PWM_SOLENOIDS
-    PWM_SOLENOIDS = [GPIO.PWM(channel, SOL_PWM_FREQ) for channel in SOL_CHANNELS]
+    def reset_print_head(self) -> None:
+        '''
+        Moves the print head to the edge of the container.
+        Should be used before calling start_print_head().
 
-    # set pull up resistor on button
-    GPIO.setup(BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        Returns:
+            None
+        '''
+        # reach edge of enclosure
+        while GPIO.input(self.BUTTON_PIN) == GPIO.HIGH:
+            self.head_stepper.onestep(style=stepper.MICROSTEP)
 
-    for stepper in [HEAD_STEPPER, PAPER_STEPPER]:
-        set_microsteps(stepper, MICROSTEPS)
-
-    HEAD_STEPPER.release()
-    PAPER_STEPPER.release()
-
-def cleanup() -> None:
-    '''Clean up resources used and stop hold current on steppers'''
-    GPIO.cleanup()
-    HEAD_STEPPER.release()
-    PAPER_STEPPER.release()
-
-# TODO: is this function even necessary?
-def set_button_callback(callback) -> None:
-    '''
-    Set a callback function for when the button is pressed.
-
-    Args:
-        callback (function): The function to call when the button is pressed.
-    Returns:
-        None
-    '''
-    GPIO.add_event_detect(BUTTON, GPIO.FALLING, callback=callback)
-
-def reset_print_head() -> None:
-    '''
-    Moves the print head to the edge of the container.
-    Should be used before calling start_print_head().
-
-    Returns:
-        None
-    '''
-    # reach edge of enclosure
-    while GPIO.input(BUTTON) == GPIO.HIGH:
-        HEAD_STEPPER.onestep(style=stepper.MICROSTEP)
-
-    HEAD_STEPPER.release()
+        self.head_stepper.release()
 
 
-def start_print_head() -> None:
-    '''
-    Moves the print head over the printing area (from edge of container).
-    Is meant to be used after reset_print_head().
+    def start_print_head(self) -> None:
+        '''
+        Moves the print head over the printing area (from edge of container).
+        Is meant to be used after reset_print_head().
 
-    Returns:
-        None
-    '''
-    # move over to start of line
-    move_stepper_n_steps(HEAD_STEPPER, RESET_STEPS)
+        Returns:
+            None
+        '''
+        # move over to start of line
+        self.__move_stepper_n_steps(self.head_stepper, self.RESET_STEPS)
 
-def new_line() -> None:
-    move_stepper_n_steps(PAPER_STEPPER, -NEW_LINE_STEPS)
-    reset_print_head()
-    start_print_head()
+    def new_line(self) -> None:
+        self.__move_stepper_n_steps(self.paper_stepper, -self.NEW_LINE_STEPS)
+        self.reset_print_head()
+        self.start_print_head()
 
-def eject_paper() -> None:
-    move_stepper_n_steps(PAPER_STEPPER, -EJECT_STEPS)
+    def eject_paper(self) -> None:
+        self.__move_stepper_n_steps(self.paper_stepper, -self.EJECT_STEPS)
 
-def mm_to_steps(circumference_mm: float, n_mm: float) -> int:
-    return int(n_mm / (circumference_mm / STEPS_PER_ROTATION)) # return number of steps to move n_mm
+    def __mm_to_steps(self, circumference_mm: float, n_mm: float) -> int:
+        return int(n_mm / (circumference_mm / self.STEPS_PER_ROTATION)) # return number of steps to move n_mm
 
-def move_stepper_n_steps(motor: stepper.StepperMotor, n: int) -> None:
-    '''
-    Move a stepper motor by n steps.
+    def __move_stepper_n_steps(self, motor: stepper.StepperMotor, n: int) -> None:
+        '''
+        Move a stepper motor by n steps.
 
-    Args:
-        motor (int): The stepper motor to run. 0 for stepper 0, 1 for stepper 1.
-        distance (int): How many steps to move by.
-    Returns:
-        None
-    '''
-    # if n > 0, for motor1 step backward 
-    # if n > 0, for motor0 step forward 
-    # xor acts as selective invertor
-    dir = stepper.FORWARD if ((n > 0) ^ (motor == HEAD_STEPPER)) else stepper.BACKWARD
+        Args:
+            motor (int): The stepper motor to run. 0 for stepper 0, 1 for stepper 1.
+            distance (int): How many steps to move by.
+        Returns:
+            None
+        '''
+        # if n > 0, for motor1 step backward 
+        # if n > 0, for motor0 step forward 
+        # xor acts as selective invertor
+        dir = stepper.FORWARD if ((n > 0) ^ (motor == self.head_stepper)) else stepper.BACKWARD
 
-    # we've selected the direction above based on the sign of n
-    # so we can just print for the absolute value of n here
-    for _ in range(abs(n)):
-        motor.onestep(direction = dir, style=stepper.MICROSTEP)
+        # we've selected the direction above based on the sign of n
+        # so we can just print for the absolute value of n here
+        for _ in range(abs(n)):
+            motor.onestep(direction = dir, style=stepper.MICROSTEP)
 
-    motor.release()
+        motor.release()
 
-def print_half_character(*sol_values: bool, serial_solenoids=True) -> None:
-    '''
-    Runs all three solenoids at specified parameters and resets them after.
-    Additionally moves the print head. This function runs hardware.
+    def __print_half_character(self, *sol_values: bool, serial_solenoids=True) -> None:
+        '''
+        Runs all three solenoids at specified parameters and resets them after.
+        Additionally moves the print head. This function runs hardware.
 
-    Args:
-        sol_values (tuple<bool>):
-            A tuple of exectly 3 boolean values. For each value at index i, 
-            if true, solenoid i is set high, otherwise set low.
-    Returns:
-        None
-    '''
-    if PWM_SOLENOIDS is None:
-        raise ValueError("PWM_SOLENOIDS cannot be None. Ensure setup() is run first.")
+        Args:
+            sol_values (tuple<bool>):
+                A tuple of exectly 3 boolean values. For each value at index i, 
+                if true, solenoid i is set high, otherwise set low.
+        Returns:
+            None
+        '''
+        if len(sol_values) != 3:
+            raise ValueError("print_half_character(): need exactly three values for solenoids")
 
-    if len(sol_values) != 3:
-        raise ValueError("print_half_character(): need exactly three values for solenoids")
+        # only bother running solenoid if there are values that need to be 
+        # printed. otherwise, just move to next half
+        if sum(sol_values) > 0:
+            if serial_solenoids:
+                for i in range(3):
+                    # GPIO.output(SOL_CHANNELS[i], sol_values[i])
+                    if sol_values[i]: # if this solenoid should fire
+                        self.pwm_solenoids[i].start(self.SOL_DUTY_CYCLE)
+                        sleep(self.SOL_PAUSE)
+                        self.pwm_solenoids[i].stop()
+                        sleep(self.SOL_PAUSE)
+            else:
+                for i in range(3):
+                    if sol_values[i]: # if this solenoid should fire
+                        self.PWM_SOLENOIDS[i].start(self.SOL_DUTY_CYCLE)
+                sleep(self.SOL_PAUSE)
+                for i in range(3):
+                    self.PWM_SOLENOIDS[i].stop()
+                sleep(self.SOL_PAUSE)
 
-    # only bother running solenoid if there are values that need to be 
-    # printed. otherwise, just move to next half
-    if sum(sol_values) > 0:
-        if serial_solenoids:
-            for i in range(3):
-                # GPIO.output(SOL_CHANNELS[i], sol_values[i])
-                if sol_values[i]: # if this solenoid should fire
-                    PWM_SOLENOIDS[i].start(SOL_DUTY_CYCLE)
-                    sleep(SOL_PAUSE)
-                    PWM_SOLENOIDS[i].stop()
-                    sleep(SOL_PAUSE)
-        else:
-            for i in range(3):
-                if sol_values[i]: # if this solenoid should fire
-                    PWM_SOLENOIDS[i].start(SOL_DUTY_CYCLE)
-            sleep(SOL_PAUSE)
-            for i in range(3):
-                PWM_SOLENOIDS[i].stop()
-            sleep(SOL_PAUSE)
+    def encode_char(self, char: str) -> None:
+        '''
+        Print a character onto the paper. This function runs hardware
 
-def ascii2braille(c: str) -> str:
-    '''
-    Takes a unicode character in the range 0x20 (SPACE) to 0x5F (underscore) and 
-    returns its unicode brialle representation.
+        Args:
+            char (character): The character to be printed
+        Returns:
+            None
+        '''
 
-    The ASCII characters to be translated to braille exist in the range 0x20 (SPACE)
-    to 0x5F (underscore), thus determining the chracter in question is a simple substraction from 0x20
-    which can then be used to index a specially crafted string as a jump table
+        ####################
+        # each character is a unique combination of six dots (2 horizontally, 3 vertically)
+        # in our hardware this is split vertically into two sets of 3 dots
+        # each solonoid is responsible for 1 dot, two times per character
+        # example: 'n' in braille. * is a dot, . is no dot
+        #
+        # * * solonoid 0 row
+        # . * solonoid 1 row
+        # * . solonoid 2 row
+        #
+        ##########
 
-    Inputs:
-        c: str, the character to transliterate
-    Outputs:
-        str: the transliterated braille character (unicode)
-    '''
-    # only uppercase characters are in the proper range
-    ascii_offset = ord(c.upper()) - 0x20
-    if not (0x0 <= ascii_offset <= 0x3F):
-        # out of range
-        raise Exception("Unsupported character")
+        if char == '\n':
+            self.new_line()
+            return
 
-    return BRAILLE_JUMP[ascii_offset]
+        _ = DEBUG and print("encode_char(): printing " + char)
+        try:
+            unicode_braille = self.transcriber.ascii2braille(char)
+        except Exception as e:
+            _ = DEBUG and print(e)
+            return
 
-def braille2array(b: str) -> BrailleArray:
-    '''
-    Takes a braille unicode character and returns its array representation for 
-    running the solenoids.
-    
-    Braille characters start at 0x2800 and, for the first 0x3F characters,
-    increment by counting in binary down the left column then down the right column
-    Example:
-        0x101110
-    is
-          .
-        .
-        . .
+        _ = DEBUG and print("encode_char(): printing (braille) " + unicode_braille)
+        array_braille = self.transcriber.braille2array(unicode_braille)
 
-    Inputs:
-        b: str, the utf8 braille character to convert
-    Outputs:
-        BrailleArray: the character represented by two BrailleHalfChar
-    '''
-    braille_offset = ord(b) - 0x2800
-    if not (0x0 <= braille_offset <= 0x3F):
-        # out of range
-        raise Exception("Unsupported character")
+        # second half first because paper is punched upside down, 
+        # so the characters need to be vertically reflected 
+        sleep(self.SOL_PAUSE)
+        self.__print_half_character(*array_braille[1], serial_solenoids=self.SERIAL_SOLENOIDS)
+        self.__move_stepper_n_steps(self.head_stepper, self.HALF_CHAR_STEPS)
 
-    return (
-            (bool(braille_offset & 1 << 0), bool(braille_offset & 1 << 1), bool(braille_offset & 1 << 2)),
-            (bool(braille_offset & 1 << 3), bool(braille_offset & 1 << 4), bool(braille_offset & 1 << 5))
-           )
+        sleep(self.SOL_PAUSE)
+        self.__print_half_character(*array_braille[0], serial_solenoids=self.SERIAL_SOLENOIDS)
+        self.__move_stepper_n_steps(self.head_stepper, self.SPACE_STEPS - self.HALF_CHAR_STEPS) # because one half char was already printed
 
-def encode_char(char: str) -> None:
-    '''
-    Print a character onto the paper. This function runs hardware
+    def encode_string(self, s: str) -> None:
+        '''
+        Print a string of characters onto the paper. This will handle chunking and 
+        putting the characters in the correct order, along with transliterations.
 
-    Args:
-        char (character): The character to be printed
-    Returns:
-        None
-    '''
+        Args:
+            s (string): The string to be printed
+        Returns:
+            None
+        '''
+        _ = DEBUG and print("encode_string(): printing " + s)
+        transliterated_s = self.transcriber.transliterate_string(s)
+        _ = DEBUG and print("encode_string(): printing (transliterated)" + transliterated_s)
 
-    ####################
-    # each character is a unique combination of six dots (2 horizontally, 3 vertically)
-    # in our hardware this is split vertically into two sets of 3 dots
-    # each solonoid is responsible for 1 dot, two times per character
-    # example: 'n' in braille. * is a dot, . is no dot
-    #
-    # * * solonoid 0 row
-    # . * solonoid 1 row
-    # * . solonoid 2 row
-    #
-    ##########
+        chunk = 0 # start at the first chunk of the string
+        chars_to_print = len(transliterated_s) # keep track of how many characters we've printed
 
-    if char == '\n':
-        new_line()
-        return
+        while chars_to_print > 0:
+            in_index = chunk * self.CHARS_PER_LINE
+            out_index = in_index + min(self.CHARS_PER_LINE, chars_to_print)
+            _ = DEBUG and print(f"encode_string(): chunk {chunk} '{transliterated_s[in_index:out_index]}'")
 
-    _ = DEBUG and print("encode_char(): printing " + char)
-    try:
-        unicode_braille = ascii2braille(char)
-    except Exception as e:
-        _ = DEBUG and print(e)
-        return
+            for char in reversed(transliterated_s[in_index:out_index]):
+                self.encode_char(char)
 
-    _ = DEBUG and print("encode_char(): printing (braille) " + unicode_braille)
-    array_braille = braille2array(unicode_braille)
+            # difference between out_index and in_index 
+            # is how many characters that we're printed in this iteration
+            chars_to_print -= out_index - in_index
+            chunk += 1
+            self.new_line()
 
-    # second half first because paper is punched upside down, 
-    # so the characters need to be vertically reflected 
-    sleep(SOL_PAUSE)
-    print_half_character(*array_braille[1], serial_solenoids=SERIAL_SOLENOIDS)
-    move_stepper_n_steps(HEAD_STEPPER, HALF_CHAR_STEPS)
+        self.head_stepper.release()
+        self.paper_stepper.release()
 
-    sleep(SOL_PAUSE)
-    print_half_character(*array_braille[0], serial_solenoids=SERIAL_SOLENOIDS)
-    move_stepper_n_steps(HEAD_STEPPER, SPACE_STEPS - HALF_CHAR_STEPS) # because one half char was already printed
-
-def encode_string(s: str) -> None:
-    '''
-    Print a string of characters onto the paper. This will handle chunking and 
-    putting the characters in the correct order.
-
-    Args:
-        s (string): The string to be printed
-    Returns:
-        None
-    '''
-    _ = DEBUG and print("encode_string(): printing " + s)
-    chunk = 0 # start at the first chunk of the string
-    chars_to_print = len(s) # keep track of how many characters we've printed
-    while chars_to_print > 0:
-        in_index = chunk * CHARS_PER_LINE
-        out_index = in_index + min(CHARS_PER_LINE, chars_to_print)
-        _ = DEBUG and print(f"encode_string(): chunk {chunk} '{s[in_index:out_index]}'")
-
-        for char in reversed(s[in_index:out_index]):
-            encode_char(char)
-
-        # difference between out_index and in_index 
-        # is how many characters that we're printed in this iteration
-        chars_to_print -= out_index - in_index
-        chunk += 1
-        new_line()
-
-    HEAD_STEPPER.release()
-    PAPER_STEPPER.release()
+    def write_diagnostic_message(self, output: TextIO) -> None:
+        '''
+        Sends a diagnostic message to some writable output. This can be used to print out
+        any errors or debug information.
+        '''
+        output.write(self.__diagnostic_message)
