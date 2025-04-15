@@ -106,11 +106,16 @@ class BrailleTranscriber:
 
         # do symbol transliteration first to not mess with future symbols added
         # in shortforms, numbers, etc.
-        symbol_level_transliteration = self.__transliterate_symbols(s)
+        symbol_level_transliteration = self.__transliterate_symbols(s.lower())
 
         # handle word level transliterations
-        words = symbol_level_transliteration.split(" ")
+        words: list[str] = symbol_level_transliteration.split(" ")
         transliterated_words: list[str] = []
+        
+        # handle comma starting textual line
+        if len(words) > 0 and words[0].isalpha():
+            transliterated_words.append(",")
+
         for word in words:
             # shortforms
             if word in self.BRAILLE_SHORTFORMS:
@@ -155,7 +160,7 @@ class BrailleTranscriber:
             elif word in self.DOT_45_WORDS:
                 transliterated_words.append(self.DOT_45_WORDS[word])
             elif word in self.DOT_456_WORDS:
-                transliterated_words.append(self.DOT_45_WORDS[word])
+                transliterated_words.append(self.DOT_456_WORDS[word])
 
             # if nothing else, just add the word
             else:
@@ -207,3 +212,14 @@ if __name__ == "__main__":
     assert(transcriber.transliterate_string("his") == "8")
 
     assert(transcriber.transliterate_string("1 themselves") == "#a !mvs")
+    print(transcriber.transliterate_string("Hello, world!"))
+    assert(transcriber.transliterate_string("Hello, world!") == ",hello1 _w6")
+    with open("endpoem.txt", "r") as src, open("endpoem_transliteration.txt", "r") as translit:
+        for src_line, translit_line in zip(src, translit):
+            # remove newlines
+            src_line = src_line.strip()
+            translit_line = translit_line.strip()
+
+            assert(transcriber.transliterate_string(src_line) == translit_line)
+
+    print("All tests passed!")
