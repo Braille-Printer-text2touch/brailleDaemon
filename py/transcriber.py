@@ -1,11 +1,14 @@
 import tomllib
 from typing import Any
+import re
 
 BrailleHalfChar = tuple[bool, bool, bool]
 BrailleArray = tuple[BrailleHalfChar, BrailleHalfChar]
 
 class BrailleTranscriber:
     '''Singleton for transcribing ASCII to Unicode Braille and array representation Braille'''
+
+    symbol_pattern = re.compile(r"({-;{{[^}]+}}-;})")
 
     @staticmethod
     def __toml_open_and_load(file_path: str) -> dict[str, Any]:
@@ -22,16 +25,9 @@ class BrailleTranscriber:
 
         # set up class variables
         cls.BRAILLE_JUMP = "⠀⠮⠐⠼⠫⠩⠯⠄⠷⠾⠡⠬⠠⠤⠨⠌⠴⠂⠆⠒⠲⠢⠖⠶⠦⠔⠱⠰⠣⠿⠜⠹⠈⠁⠃⠉⠙⠑⠋⠛⠓⠊⠚⠅⠇⠍⠝⠕⠏⠟⠗⠎⠞⠥⠧⠺⠭⠽⠵⠪⠳⠻⠘⠸"
-        cls.BRAILLE_SHORTFORMS    = cls.__toml_open_and_load("../brailleTransliterations/shortforms.toml")
-        cls.ALPHABETIC_WORD_SIGNS = cls.__toml_open_and_load("../brailleTransliterations/alphabetic-word-signs.toml")
-        cls.STRONG_CONTRACTIONS   = cls.__toml_open_and_load("../brailleTransliterations/strong-contractions.toml")
-        cls.LOWER_CONTRACTIONS    = cls.__toml_open_and_load("../brailleTransliterations/lower-contractions.toml")
-        cls.DOT_56_FINAL_LETTER   = cls.__toml_open_and_load("../brailleTransliterations/dot-56.toml")
-        cls.DOT_46_FINAL_LETTER   = cls.__toml_open_and_load("../brailleTransliterations/dot-46.toml")
-        cls.DOT_5_WORDS           = cls.__toml_open_and_load("../brailleTransliterations/dot-5.toml")
-        cls.DOT_45_WORDS          = cls.__toml_open_and_load("../brailleTransliterations/dot-45.toml")
-        cls.DOT_456_WORDS         = cls.__toml_open_and_load("../brailleTransliterations/dot-456.toml")
+        cls.BRAILLE_SPECIAL_WORDS   = cls.__toml_open_and_load("../brailleTransliterations/special-words.toml")
         cls.BRAILLE_SPECIAL_SYMBOLS = cls.__toml_open_and_load("../brailleTransliterations/special-symbols.toml")
+        cls.BRAILLE_SPECIAL_SUFFIXES = cls.__toml_open_and_load("../brailleTransliterations/special-suffixes.toml")
 
         return cls.__instance
     
@@ -106,67 +102,34 @@ class BrailleTranscriber:
 
         # do symbol transliteration first to not mess with future symbols added
         # in shortforms, numbers, etc.
-        symbol_level_transliteration = self.__transliterate_symbols(s.lower())
+        # this is just a placeholder replacement, the actual symbols are added later
+        # to not interfere with the braille special words
+        symbol_level_transliteration, symbol_placeholders = self.__transliterate_symbols(s)
 
         # handle word level transliterations
-        words: list[str] = symbol_level_transliteration.split(" ")
+        # a "chunk" is a collection of words and symbols
+        # the words should be transliterated, but not symbols
+        chunks: list[str] = symbol_level_transliteration.split(" ")
         transliterated_words: list[str] = []
-        
-        # handle comma starting textual line
-        if len(words) > 0 and words[0].isalpha():
-            transliterated_words.append(",")
 
-        for word in words:
-            # shortforms
-            if word in self.BRAILLE_SHORTFORMS:
-                transliterated_words.append(self.BRAILLE_SHORTFORMS[word])
+        for chunk in chunks:
+            # parse out the actual word, not the symbols
+            word_and_syms = re.split(self.symbol_pattern, chunk)
+            
+            
+            # transliterate the chunk
+            word_transliteration = [self.__transliterate_words(word) for word in word_and_syms]
 
-            # numbers
-            elif word.isnumeric():
-                # turn numbers into cooresponding braille alphabetic character
-                # 1 => a, 2 => b, 3 => c, ... 0 => j
-                # and then prefix
-                numbers_as_letters = []
-                for c in word:
-                    if c == '0':
-                        letter_ascii = 0x6A # just make 0 lowercase a, it's not linear with the rest
-                    else:
-                        letter_ascii = ord(c) - 0x31 + 0x61 # get number offset (from '1' or 0x31) and add to lowercase letter base (0x61)
-                    numbers_as_letters.append(chr(letter_ascii)) # turn back to character
-                
-                transliterated_words.append('#' + "".join(numbers_as_letters)) # prefix with number prefix '#'
-
-            # alphabetic word signs
-            elif word in self.ALPHABETIC_WORD_SIGNS:
-                transliterated_words.append(self.ALPHABETIC_WORD_SIGNS[word])
-
-            # contractions
-            elif word in self.STRONG_CONTRACTIONS:
-                transliterated_words.append(self.STRONG_CONTRACTIONS[word])
-            elif word in self.LOWER_CONTRACTIONS:
-                transliterated_words.append(self.LOWER_CONTRACTIONS[word])
-
-            # final-letter combinations
-            # try to replace the suffix and see if anything changed
-            # if so, add the changed word
-            elif (suffix_word := self.__replace_suffixes(self.DOT_56_FINAL_LETTER, word)) != word:
-                transliterated_words.append(suffix_word)
-            elif (suffix_word := self.__replace_suffixes(self.DOT_46_FINAL_LETTER, word)) != word:
-                transliterated_words.append(suffix_word)
-
-            # more contractions!
-            elif word in self.DOT_5_WORDS:
-                transliterated_words.append(self.DOT_5_WORDS[word])
-            elif word in self.DOT_45_WORDS:
-                transliterated_words.append(self.DOT_45_WORDS[word])
-            elif word in self.DOT_456_WORDS:
-                transliterated_words.append(self.DOT_456_WORDS[word])
-
-            # if nothing else, just add the word
-            else:
-                transliterated_words.append(word)
+            # rejoin the chunk and append it to the final output
+            transliterated_words.append("".join(word_transliteration))
 
         transliterated_string = " ".join(transliterated_words) # add spaces between processed words
+
+        # finally, replace the symbol placeholders with the actual symbols
+        for symbol_placeholder, symbol in symbol_placeholders.items():
+            # replace the placeholder with the actual symbol
+            transliterated_string = re.sub(re.escape(symbol_placeholder), symbol, transliterated_string)
+
         return transliterated_string
 
     @staticmethod
@@ -182,44 +145,118 @@ class BrailleTranscriber:
             if word.startswith(prefix):
                 return word.removeprefix(prefix) + prefixes[prefix]
         return word
+    
+    def __transliterate_words(self, word: str) -> str:
+        '''Given a word return the transliterated version of the word
+        if it exists, otherwise return the word itself
+        '''
+        if re.match(self.symbol_pattern, word) is not None:
+            # "word" is a symbol, so skip
+            return word
 
-    def __transliterate_symbols(self, s: str) -> str:
-        all_chars = list(s)
+        # handle numbers
+        if word.isnumeric():
+            # turn numbers into cooresponding braille alphabetic character
+            # 1 => a, 2 => b, 3 => c, ... 0 => j
+            # and then prefix
+            numbers_as_letters = []
+            for c in word:
+                if c == '0':
+                    letter_ascii = 0x6A # just make 0 lowercase a, it's not linear with the rest
+                else:
+                    letter_ascii = ord(c) - 0x31 + 0x61 # get number offset (from '1' or 0x31) and add to lowercase letter base (0x61)
+                numbers_as_letters.append(chr(letter_ascii)) # turn back to character
+                    
+            return ('#' + "".join(numbers_as_letters)) # prefix with number prefix '#'
 
-        for index, c in enumerate(all_chars):
+        # handle suffixes
+        for collection in self.BRAILLE_SPECIAL_SUFFIXES.values():
+            if (suffix_word := self.__replace_suffixes(collection, word)) != word:
+                # if found a suffix, finish processing that word
+                return suffix_word
+
+        # handle other special words
+        # collection is an inner dictionary
+        for collection in self.BRAILLE_SPECIAL_WORDS.values():
+            if word in collection:
+                return collection[word]
+
+        # didn't encounter any special collection words
+        # if nothing else, just return the word 
+        return word
+
+
+    def __transliterate_symbols(self, s: str) -> tuple[str, dict[str,str]]:
+        '''Individual symbol transliteration, not word level
+        
+        Returns
+            tuple[str, dict[str,str]]: the transliterated string and a dictionary of temporary symbol replacements
+        '''
+        all_chars: list[str] = []
+        placeholders: dict[str, str] = {}
+
+        for c in s:
             if c in self.BRAILLE_SPECIAL_SYMBOLS:
-                all_chars[index] = self.BRAILLE_SPECIAL_SYMBOLS[c]
+                placeholder = self.wrap_symbol(c)
+                new_c = self.BRAILLE_SPECIAL_SYMBOLS[c]
 
-        return "".join(all_chars)
+                # add a new placeholder
+                # may overwrite an existing one, but that's okay
+                # since the same symbol will be replaced with the same placeholder
+                placeholders[placeholder] = new_c
+                
+                # add the placeholder to the list
+                all_chars.append(placeholder)
+
+            else:
+                # character isn't a special symbol
+                # check for uppercase case
+                if c.isupper():
+                    placeholder = self.wrap_symbol('upper')
+                    placeholders[placeholder] = ',' # add comma for uppercase
+                    all_chars.append(placeholder) # add comma for uppercase
+                new_c = c
+                all_chars.append(new_c.lower())
+
+        return "".join(all_chars), placeholders
+    
+    @staticmethod
+    def wrap_symbol(s: str) -> str:
+        '''Simple helper. Given a string, wrap it in the symbols markings'''
+        return "{-;{{" + s + "}}-;}"
+
+
+def assert_equal_strings_verbose(s0: str, s1: str) -> None:
+    if s0 != s1:
+        raise AssertionError(f"\n\nExpected: '{s0}'\nGot: '{s1}'\n\n")
 
 if __name__ == "__main__":
     transcriber = BrailleTranscriber()
     
-    assert(transcriber.ascii2braille('a') == '⠁')
-    assert(transcriber.ascii2braille('5') == '⠢')
-    assert(transcriber.ascii2braille('&') == '⠯')
+    assert_equal_strings_verbose(transcriber.ascii2braille('a'), '⠁')
+    assert_equal_strings_verbose(transcriber.ascii2braille('5'), '⠢')
+    assert_equal_strings_verbose(transcriber.ascii2braille('&'), '⠯')
 
-    assert(transcriber.braille2array('⠁') == ((1,0,0),(0,0,0)))
-    assert(transcriber.braille2array('⠢') == ((0,1,0),(0,0,1)))
-    assert(transcriber.braille2array('⠯') == ((1,1,1),(1,0,1)))
+    assert_equal_strings_verbose(transcriber.braille2array('⠁'), ((1,0,0),(0,0,0)))
+    assert_equal_strings_verbose(transcriber.braille2array('⠢'), ((0,1,0),(0,0,1)))
+    assert_equal_strings_verbose(transcriber.braille2array('⠯'), ((1,1,1),(1,0,1)))
 
-    assert(transcriber.transliterate_string("but") == "b")
-    assert(transcriber.transliterate_string("about") == "ab")
-    assert(transcriber.transliterate_string("themselves") == "!mvs")
-    assert(transcriber.transliterate_string("1") == "#a")
-    assert(transcriber.transliterate_string("190") == "#aij")
-    assert(transcriber.transliterate_string("and") == "&")
-    assert(transcriber.transliterate_string("his") == "8")
+    assert_equal_strings_verbose(transcriber.transliterate_string("but"), "b")
+    assert_equal_strings_verbose(transcriber.transliterate_string("about"), "ab")
+    assert_equal_strings_verbose(transcriber.transliterate_string("themselves"), "!mvs")
+    assert_equal_strings_verbose(transcriber.transliterate_string("1"), "#a")
+    assert_equal_strings_verbose(transcriber.transliterate_string("190"), "#aij")
+    assert_equal_strings_verbose(transcriber.transliterate_string("and"), "&")
+    assert_equal_strings_verbose(transcriber.transliterate_string("his"), "8")
 
-    assert(transcriber.transliterate_string("1 themselves") == "#a !mvs")
-    print(transcriber.transliterate_string("Hello, world!"))
-    assert(transcriber.transliterate_string("Hello, world!") == ",hello1 _w6")
+    assert_equal_strings_verbose(transcriber.transliterate_string("1 themselves"), "#a !mvs")
+    assert_equal_strings_verbose(transcriber.transliterate_string("Hello, world!"), ",hello1 _w6")
     with open("endpoem.txt", "r") as src, open("endpoem_transliteration.txt", "r") as translit:
         for src_line, translit_line in zip(src, translit):
             # remove newlines
             src_line = src_line.strip()
             translit_line = translit_line.strip()
 
-            assert(transcriber.transliterate_string(src_line) == translit_line)
+            assert_equal_strings_verbose(transcriber.transliterate_string(src_line), translit_line)
 
     print("All tests passed!")

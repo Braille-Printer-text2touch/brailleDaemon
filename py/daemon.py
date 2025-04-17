@@ -1,16 +1,18 @@
 import os
 import signal
 import threading
-import control
+from control import BraillePrinterDriver
 from queue import Queue
 import time
+from DriverCommunicator import BrailleDriverCommunicator
 
 PIPE_PATH = "/var/run/user/1000/text2touch_pipe"
-STATUS_PIPE_PATH = "/var/run/user/1000/text2touch_status_pipe"
-COMMAND_PIPE_PATH = "/var/run/user/1000/text2touch_command_pipe"
 
 # Spooler queue to manage print jobs
 SPOOLER_QUEUE = Queue()
+
+CONTROL      = BraillePrinterDriver()
+DRIVER_COMMS = BrailleDriverCommunicator()
 
 def spool_job(data: str) -> None:
     '''
@@ -47,15 +49,14 @@ def pause_for_next_job() -> None:
     Returns:
         None
     '''
-    with open(COMMAND_PIPE_PATH, "r") as command_pipe:
-        while True:
-            command = command_pipe.read().strip()
-            if command == "next":
-                return
-            elif input("Next doc? (y/n): ").strip().lower() == "y":
-                return
-            else:
-                time.sleep(1)  # wait for a second before checking again
+    while True:
+        command = DRIVER_COMMS.read_cmd()
+        if command == "next":
+            return
+        elif input("Next doc? (y/n): ").strip().lower() == "y":
+            return
+        else:
+            time.sleep(1)  # wait for a second before checking again
 
 def print_job(data: str) -> None:
     '''
@@ -69,15 +70,12 @@ def print_job(data: str) -> None:
     '''
     # critical section because ecoding will be running the hardware
     for line in data.split('\n'):
-        transliteration = control.transliterate_string(line.strip())
-        control.encode_string(transliteration)
+        transliteration = CONTROL.transliterate_string(line.strip())
+        CONTROL.encode_string(transliteration)
 
 def handle_kill(sig, frame) -> None:
     '''Do routine cleanup and remove pipe. For when a kill signal is detected'''
-    control.cleanup()
     os.remove(PIPE_PATH)
-    os.remove(STATUS_PIPE_PATH)
-    os.remove(COMMAND_PIPE_PATH)
     SPOOLER_THREAD.join()
     exit(0)
 
@@ -95,13 +93,10 @@ def safe_start_pipe(path: str) -> None:
 
 SPOOLER_THREAD: threading.Thread = threading.Thread(target=process_spooler, daemon=True)
 def main() -> None:
-    control.setup()
     signal.signal(signal.SIGINT, handle_kill)
 
     # Set up pipes
     safe_start_pipe(PIPE_PATH)
-    safe_start_pipe(STATUS_PIPE_PATH)
-    safe_start_pipe(COMMAND_PIPE_PATH)
 
     # Start spooler thread
     SPOOLER_THREAD.start()

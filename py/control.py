@@ -29,7 +29,7 @@ class BraillePrinterDriver:
     HEAD_STEPPER_DIAMETER = config["SIZES"]["HEAD_STEPPER_DIAMETER"]
     STEPPER_DEGREES = config["STEPPERS"]["STEPPER_DEGREES"]
 
-    SOL_CHANNELS      = (config["SOL_0"], config["SOL_1"], config["SOL_2"])
+    SOL_CHANNELS      = (SOL_0_PIN, SOL_1_PIN, SOL_2_PIN)
     STEPS_PER_ROTATION = int(360 / STEPPER_DEGREES) * MICROSTEPS
     HALF_CHAR_STEPS   = int(config["SIZES"]["HALF_CHAR_STEPS"]  / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
     SPACE_STEPS       = int(config["SIZES"]["SPACE_STEPS"]      / ((math.pi * HEAD_STEPPER_DIAMETER)  / STEPS_PER_ROTATION))
