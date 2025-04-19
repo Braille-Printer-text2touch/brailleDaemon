@@ -20,6 +20,10 @@ pip3 install -r requirements.txt
 python3 daemon.py
 ```
 
+## Configuration
+
+`config.toml` can be modified to change certain specifics about the driver. It comes with default values for all fields.
+
 ## Structure
 
 This repository contains two major parts of the Braille printer project:
