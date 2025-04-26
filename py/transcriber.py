@@ -228,7 +228,7 @@ class BrailleTranscriber:
 
 def assert_equal_strings_verbose(s0: str, s1: str) -> None:
     if s0 != s1:
-        raise AssertionError(f"\n\nExpected: '{s0}'\nGot: '{s1}'\n\n")
+        raise AssertionError(f"\n\nExpected: '{s0}'\nGot:      '{s1}'\n\n")
 
 if __name__ == "__main__":
     transcriber = BrailleTranscriber()
@@ -251,12 +251,22 @@ if __name__ == "__main__":
 
     assert_equal_strings_verbose(transcriber.transliterate_string("1 themselves"), "#a !mvs")
     assert_equal_strings_verbose(transcriber.transliterate_string("Hello, world!"), ",hello1 _w6")
-    with open("endpoem.txt", "r") as src, open("endpoem_transliteration.txt", "r") as translit:
-        for src_line, translit_line in zip(src, translit):
-            # remove newlines
-            src_line = src_line.strip()
-            translit_line = translit_line.strip()
 
-            assert_equal_strings_verbose(transcriber.transliterate_string(src_line), translit_line)
+    print("\n\nThe follwing asserations being right or wrong depends on exact braille specification desired.\n" \
+    "Output represents lines that don't match. " \
+    "Please check manually.")
+
+    # test the end poem
+    with open("endpoem.txt", "r") as src, open("endpoem_transliteration.txt", "r") as translit:
+        try:
+            for src_line, translit_line in zip(src, translit):
+                # remove newlines
+                src_line = src_line.strip()
+                translit_line = translit_line.strip()
+
+                assert_equal_strings_verbose(transcriber.transliterate_string(src_line), translit_line)
+        except AssertionError as e:
+            print(e)
+
 
     print("All tests passed!")

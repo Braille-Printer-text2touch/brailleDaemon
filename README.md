@@ -20,6 +20,49 @@ pip3 install -r requirements.txt
 python3 daemon.py
 ```
 
+### Running the Entire System
+
+Text2Touch is made of several components, including the braille printer daemon, a web server, and an IPP printer. To run the entire system, you need to start each component separately. The following script shows an example of how to do this.
+
+```bash
+#!/bin/bash
+
+# Check if the script is run as root
+if [ "$EUID" -ne 0 ]; then
+  echo "Please run this script as root."
+  exit 1
+fi
+
+# Function to kill a process by script name if running
+kill_process() {
+  local script_name=$1
+  local pids
+  pids=$(pgrep -f "$script_name")
+  if [ -n "$pids" ]; then
+    echo "Killing existing processes for $script_name"
+    kill $pids
+  fi
+}
+
+kill_process "daemon.py"
+kill_process "app.py"
+kill_process "ipp.py"
+
+cd webInterface
+.venv/bin/python3 app.py &
+cd ..
+
+cd Pseudo-IPP-Printer
+.venv/bin/python3 ipp.py &
+
+# Advertise the IPP printer over mDNS
+avahi-publish-service "Braille Printer" _ipp._tcp 631 &
+cd ..
+
+cd brailleDaemon/py
+.venv/bin/python3 daemon.py
+```
+
 ## Configuration
 
 `config.toml` can be modified to change certain specifics about the driver. It comes with default values for all fields.

@@ -227,6 +227,8 @@ class BraillePrinterDriver:
         Print a string of characters onto the paper. This will handle chunking and 
         putting the characters in the correct order, along with transliterations.
 
+        This function really acts as the entry point for the whole printing process.
+
         Args:
             s (string): The string to be printed
         Returns:

@@ -25,6 +25,7 @@ def spool_job(data: str) -> None:
     '''
     SPOOLER_QUEUE.put(data)
     print(f"Job added to spooler. Queue size: {SPOOLER_QUEUE.qsize()}")
+    DRIVER_COMMS.write_status(f"queue size: {SPOOLER_QUEUE.qsize()}")
 
 def process_spooler() -> None:
     '''
@@ -70,8 +71,7 @@ def print_job(data: str) -> None:
     '''
     # critical section because ecoding will be running the hardware
     for line in data.split('\n'):
-        transliteration = CONTROL.transliterate_string(line.strip())
-        CONTROL.encode_string(transliteration)
+        CONTROL.encode_string(line)
 
 def handle_kill(sig, frame) -> None:
     '''Do routine cleanup and remove pipe. For when a kill signal is detected'''
@@ -101,6 +101,9 @@ def main() -> None:
     # Start spooler thread
     SPOOLER_THREAD.start()
     print("Spooler thread started")
+
+    # reset the print head
+    CONTROL.new_line()
 
     while True:
         # have to keep opening the pipe because the connection closes
